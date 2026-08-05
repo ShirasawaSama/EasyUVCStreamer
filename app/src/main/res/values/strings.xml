@@ -1,7 +1,7 @@
 <resources>
-    <string name="app_name">UVC 推流</string>
-    <string name="brand_title">UVC 推流</string>
-    <string name="brand_subtitle">USB 摄像头 · MJPEG 直推</string>
+    <string name="app_name">UVC 立传</string>
+    <string name="brand_title">UVC 立传</string>
+    <string name="brand_subtitle">EasyUVCStreamer · USB 摄像头直推</string>
 
     <string name="preview_content_description">摄像头预览画面</string>
 

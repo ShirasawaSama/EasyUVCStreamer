@@ -1,0 +1,15 @@
+# JNI: UvcNative is loaded via System.loadLibrary + external fun names.
+-keep class com.omoai.simpleuvcstreamer.uvc.UvcNative {
+    *;
+}
+
+# Keep all native method names (JNI registration by name).
+-keepclasseswithmembernames,includedescriptorclasses class * {
+    native <methods>;
+}
+
+# Entry points referenced from the Manifest / activity-alias.
+-keep class com.omoai.simpleuvcstreamer.MainActivity { *; }
+
+# USB attach / permission broadcast plumbing.
+-keep class com.omoai.simpleuvcstreamer.usb.** { *; }

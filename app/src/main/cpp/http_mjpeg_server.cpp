@@ -93,9 +93,10 @@ void setup_routes(hv::HttpService &service) {
         resp->body =
                 "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
                 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-                "<title>UVC MJPEG</title></head><body style=\"margin:0;background:#111;color:#eee;"
+                "<title>UVC 立传</title></head><body style=\"margin:0;background:#111;color:#eee;"
                 "font-family:sans-serif;text-align:center\">"
-                "<h1 style=\"margin:12px\">SimpleUVCStreamer</h1>"
+                "<h1 style=\"margin:12px\">UVC 立传</h1>"
+                "<p style=\"opacity:.7;margin:0 12px 12px;font-size:14px\">EasyUVCStreamer</p>"
                 "<img src=\"/stream.mjpg\" style=\"max-width:100%;height:auto\" alt=\"stream\">"
                 "</body></html>";
         return 200;

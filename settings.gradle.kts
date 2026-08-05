@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SimpleUVCStreamer"
+rootProject.name = "EasyUVCStreamer"
 include(":app")

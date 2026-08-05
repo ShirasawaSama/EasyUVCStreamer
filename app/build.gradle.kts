@@ -39,6 +39,16 @@ android {
 
     buildTypes {
         release {
+            // AGP 9.3+: enables R8 code shrinking/obfuscation + resource shrinking.
+            optimization {
+                enable = true
+            }
+            ndk {
+                // Upload native symbols to Play / keep crash stacks useful.
+                debugSymbolLevel = "SYMBOL_TABLE"
+            }
+        }
+        debug {
             optimization {
                 enable = false
             }
