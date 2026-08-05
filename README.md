@@ -4,6 +4,11 @@
 
 桌面显示名：**UVC 立传** · 工程名：**EasyUVCStreamer**
 
+<p align="center">
+  <img src="images/1.jpg" width="280" alt="采集与本机预览" />
+  <img src="images/2.jpg" width="280" alt="推流地址与端口" />
+</p>
+
 ## 能做什么
 
 - 枚举 / 打开 USB UVC 设备，协商 MJPEG 分辨率并开流
@@ -59,6 +64,7 @@ app/src/main/
   java/.../          # UI、USB、会话、HTTP 控制器
   cpp/               # JNI、libuvc 采集、帧管线、libhv MJPEG 服务
   cpp/overlay-ports/ # libuvc Android 补丁（iso transfer 等）
+images/              # 截图
 ```
 
 ## 许可
