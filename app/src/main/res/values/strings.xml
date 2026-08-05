@@ -11,6 +11,7 @@
     <string name="label_device">摄像头</string>
     <string name="label_resolution">分辨率</string>
     <string name="switch_stream">开始采集</string>
+    <string name="switch_auto_launch">插入摄像头时自动打开应用</string>
     <string name="switch_preview">本机预览（费电，默认关）</string>
 
     <string name="http_port_hint">端口</string>
@@ -47,7 +48,7 @@
     <string name="status_bad_port">端口无效（1–65535）</string>
     <string name="status_http_ok">HTTP 已监听 :%1$d</string>
     <string name="status_http_fail">HTTP 启动失败 :%1$d</string>
-    <string name="status_fps">帧率 %1$d</string>
+    <string name="status_fps">帧率 %1$3d</string>
     <string name="status_fps_idle">帧率 —</string>
     <string name="perm_rationale_mic">USB 摄像头常带麦克风；授权录音可消除系统提示，并便于后续采集 USB 音频。</string>
 </resources>

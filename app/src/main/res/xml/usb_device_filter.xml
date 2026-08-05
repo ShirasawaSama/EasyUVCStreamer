@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Match typical UVC gadgets so Android can offer / auto-launch this app on plug-in.
+  - class 14: USB Video Class
+  - class 239 / subclass 2 / protocol 1: Interface Association (common UVC composite)
+-->
+<resources>
+    <usb-device class="14" />
+    <usb-device class="239" subclass="2" protocol="1" />
+</resources>

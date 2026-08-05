@@ -53,12 +53,14 @@
 
             <TextView
                 android:id="@+id/tvFps"
-                android:layout_width="wrap_content"
+                android:layout_width="96dp"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
                 android:background="@drawable/bg_url_block"
                 android:fontFamily="monospace"
-                android:paddingHorizontal="12dp"
+                android:gravity="center"
+                android:maxLines="1"
+                android:paddingHorizontal="8dp"
                 android:paddingVertical="8dp"
                 android:text="@string/status_fps_idle"
                 android:textColor="@color/text_secondary"
@@ -121,6 +123,15 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
                     android:text="@string/switch_stream"
+                    android:textAppearance="@style/Text.Uvc.Body" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchAutoLaunch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:checked="true"
+                    android:text="@string/switch_auto_launch"
                     android:textAppearance="@style/Text.Uvc.Body" />
 
                 <com.google.android.material.materialswitch.MaterialSwitch

@@ -3,8 +3,10 @@ package com.omoai.simpleuvcstreamer
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -29,6 +31,7 @@ import com.omoai.simpleuvcstreamer.preview.FramePreviewController
 import com.omoai.simpleuvcstreamer.stream.HttpStreamController
 import com.omoai.simpleuvcstreamer.stream.NetworkAddresses
 import com.omoai.simpleuvcstreamer.ui.SafeArea
+import com.omoai.simpleuvcstreamer.usb.UsbAutoLaunch
 import com.omoai.simpleuvcstreamer.usb.UsbDeviceMonitor
 import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
 import com.omoai.simpleuvcstreamer.util.AppPermissions
@@ -50,6 +53,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private lateinit var tvStatus: TextView
     private lateinit var tvFps: TextView
     private lateinit var switchStream: MaterialSwitch
+    private lateinit var switchAutoLaunch: MaterialSwitch
     private lateinit var switchPreview: MaterialSwitch
     private lateinit var previewContainer: MaterialCardView
     private lateinit var dropdownDevice: AutoCompleteTextView
@@ -109,6 +113,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         tvStatus = findViewById(R.id.tvStatus)
         tvFps = findViewById(R.id.tvFps)
         switchStream = findViewById(R.id.switchStream)
+        switchAutoLaunch = findViewById(R.id.switchAutoLaunch)
         switchPreview = findViewById(R.id.switchPreview)
         previewContainer = findViewById(R.id.previewContainer)
         dropdownDevice = findViewById(R.id.dropdownDevice)
@@ -165,6 +170,12 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             previewContainer.visibility = if (checked) View.VISIBLE else View.GONE
         }
 
+        UsbAutoLaunch.syncFromPrefs(this)
+        switchAutoLaunch.isChecked = UsbAutoLaunch.isEnabled(this)
+        switchAutoLaunch.setOnCheckedChangeListener { _, checked ->
+            UsbAutoLaunch.setEnabled(this, checked)
+        }
+
         switchStream.setOnCheckedChangeListener { _, isChecked ->
             FileLogger.log("Switch changed: $isChecked")
             if (isChecked) startStreaming() else stopStreaming()
@@ -191,6 +202,38 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
         bindDropdowns()
         refreshDeviceList()
+        handleUsbAttachIntent(intent, autoStart = true)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleUsbAttachIntent(intent, autoStart = true)
+    }
+
+    /**
+     * Launched by the system when a filtered UVC device is plugged in.
+     * In that path USB permission is usually already granted.
+     */
+    private fun handleUsbAttachIntent(intent: Intent?, autoStart: Boolean) {
+        if (intent?.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
+        val device = readUsbDeviceExtra(intent) ?: return
+        FileLogger.log("USB attach intent: ${device.deviceName} ${device.productName}")
+        if (!::session.isInitialized || !UvcNative.isLibLoaded) return
+        refreshDeviceList()
+        if (autoStart && UsbAutoLaunch.isEnabled(this) && !switchStream.isChecked) {
+            setSwitchChecked(true)
+            prepareDevice(device, startStream = true)
+        }
+    }
+
+    private fun readUsbDeviceExtra(intent: Intent): UsbDevice? {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+        }
     }
 
     private fun applyHttpPortFromUi() {
