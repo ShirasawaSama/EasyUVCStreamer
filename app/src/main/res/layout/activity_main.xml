@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<com.omoai.simpleuvcstreamer.ui.SteadyNestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true"
     android:background="@color/ink"
-    android:clipToPadding="false"
+    android:clipToPadding="true"
+    android:fillViewport="true"
+    android:overScrollMode="never"
     android:paddingHorizontal="16dp"
     android:paddingTop="12dp"
     android:paddingBottom="28dp">
@@ -15,7 +17,6 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <!-- Header -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -65,45 +66,12 @@
                 android:visibility="gone" />
         </LinearLayout>
 
-        <!-- Preview -->
-        <com.google.android.material.card.MaterialCardView
-            style="@style/Widget.Uvc.Card"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp">
-
-            <FrameLayout
-                android:layout_width="match_parent"
-                android:layout_height="220dp">
-
-                <ImageView
-                    android:id="@+id/imagePreview"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:adjustViewBounds="true"
-                    android:background="@drawable/bg_preview"
-                    android:contentDescription="@string/preview_content_description"
-                    android:scaleType="fitCenter" />
-
-                <TextView
-                    android:id="@+id/tvPreviewHint"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_gravity="center"
-                    android:gravity="center"
-                    android:paddingHorizontal="24dp"
-                    android:text="@string/preview_placeholder"
-                    android:textColor="@color/text_muted"
-                    android:textSize="13sp" />
-            </FrameLayout>
-        </com.google.android.material.card.MaterialCardView>
-
         <!-- Capture -->
         <com.google.android.material.card.MaterialCardView
             style="@style/Widget.Uvc.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="14dp">
+            android:layout_marginTop="16dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -117,35 +85,35 @@
                     android:text="@string/section_capture"
                     android:textAppearance="@style/Text.Uvc.Section" />
 
-                <TextView
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
-                    android:text="@string/label_device"
-                    android:textAppearance="@style/Text.Uvc.Label" />
+                    android:hint="@string/label_device">
 
-                <Spinner
-                    android:id="@+id/spinnerDevice"
-                    android:layout_width="match_parent"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="4dp"
-                    android:background="@drawable/bg_url_block"
-                    android:paddingHorizontal="4dp" />
+                    <AutoCompleteTextView
+                        android:id="@+id/dropdownDevice"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="none"
+                        android:textColor="@color/text_primary" />
+                </com.google.android.material.textfield.TextInputLayout>
 
-                <TextView
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:text="@string/label_resolution"
-                    android:textAppearance="@style/Text.Uvc.Label" />
+                    android:layout_marginTop="10dp"
+                    android:hint="@string/label_resolution">
 
-                <Spinner
-                    android:id="@+id/spinnerResolution"
-                    android:layout_width="match_parent"
-                    android:layout_height="48dp"
-                    android:layout_marginTop="4dp"
-                    android:background="@drawable/bg_url_block"
-                    android:paddingHorizontal="4dp" />
+                    <AutoCompleteTextView
+                        android:id="@+id/dropdownResolution"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="none"
+                        android:textColor="@color/text_primary" />
+                </com.google.android.material.textfield.TextInputLayout>
 
                 <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/switchStream"
@@ -163,6 +131,25 @@
                     android:checked="false"
                     android:text="@string/switch_preview"
                     android:textAppearance="@style/Text.Uvc.Body" />
+
+                <!-- Preview only when switch is on, below the switch -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/previewContainer"
+                    style="@style/Widget.Uvc.Card"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:visibility="gone"
+                    app:cardBackgroundColor="@color/preview_void">
+
+                    <ImageView
+                        android:id="@+id/imagePreview"
+                        android:layout_width="match_parent"
+                        android:layout_height="200dp"
+                        android:adjustViewBounds="true"
+                        android:contentDescription="@string/preview_content_description"
+                        android:scaleType="fitCenter" />
+                </com.google.android.material.card.MaterialCardView>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -234,17 +221,27 @@
                     android:text="@string/http_urls_title"
                     android:textAppearance="@style/Text.Uvc.Label" />
 
+                <LinearLayout
+                    android:id="@+id/listAccessUrls"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="vertical"
+                    android:showDividers="middle"
+                    android:divider="@drawable/spacer_access_list" />
+
                 <TextView
-                    android:id="@+id/tvHttpUrls"
+                    android:id="@+id/tvHttpNoUrls"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
                     android:background="@drawable/bg_url_block"
-                    android:padding="12dp"
-                    android:textAppearance="@style/Text.Uvc.Mono"
-                    android:textIsSelectable="true" />
+                    android:padding="14dp"
+                    android:text="@string/http_no_urls"
+                    android:textAppearance="@style/Text.Uvc.Label"
+                    android:visibility="gone" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
     </LinearLayout>
-</androidx.core.widget.NestedScrollView>
+</com.omoai.simpleuvcstreamer.ui.SteadyNestedScrollView>

@@ -17,13 +17,19 @@ object SafeArea {
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            v.setPadding(
-                initialLeft + bars.left,
-                initialTop + bars.top,
-                initialRight + bars.right,
-                initialBottom + bars.bottom
-            )
+            val nextLeft = initialLeft + bars.left
+            val nextTop = initialTop + bars.top
+            val nextRight = initialRight + bars.right
+            val nextBottom = initialBottom + bars.bottom
+            if (v.paddingLeft != nextLeft ||
+                v.paddingTop != nextTop ||
+                v.paddingRight != nextRight ||
+                v.paddingBottom != nextBottom
+            ) {
+                v.setPadding(nextLeft, nextTop, nextRight, nextBottom)
+            }
             insets
         }
+        ViewCompat.requestApplyInsets(root)
     }
 }

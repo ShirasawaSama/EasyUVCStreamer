@@ -11,6 +11,13 @@ import com.omoai.simpleuvcstreamer.uvc.UvcNative
  */
 class HttpStreamController(context: Context) {
 
+    data class AccessEndpoint(
+        val label: String,
+        val url: String,
+        val host: String,
+        val tier: NetworkAddresses.AccessTier,
+    )
+
     companion object {
         const val DEFAULT_PORT = 8080
         const val STREAM_PATH = "/stream.mjpg"
@@ -45,7 +52,6 @@ class HttpStreamController(context: Context) {
         return res == 0 && UvcNative.nativeIsHttpServerRunning()
     }
 
-    /** Apply a new port (restarts server). */
     fun applyPort(newPort: Int): Boolean {
         val p = newPort.coerceIn(1, 65535)
         if (isRunning && UvcNative.nativeGetHttpServerPort() == p) {
@@ -62,17 +68,21 @@ class HttpStreamController(context: Context) {
         FileLogger.log("HTTP stopped")
     }
 
-    fun accessLines(): List<String> {
+    /** Stream URLs only, sorted by access tier. */
+    fun accessEndpoints(): List<AccessEndpoint> {
         val p = if (isRunning) UvcNative.nativeGetHttpServerPort() else port
         if (p !in 1..65535) return emptyList()
-        val lines = mutableListOf<String>()
-        for (ep in NetworkAddresses.ipv4Endpoints()) {
-            val label = if (ep.isLoopback) "本机" else ep.interfaceName
-            lines += "[$label] 预览页"
-            lines += "  http://${ep.host}:$p/"
-            lines += "[$label] 直链"
-            lines += "  http://${ep.host}:$p$STREAM_PATH"
+        return NetworkAddresses.ipv4Endpoints().map { ep ->
+            AccessEndpoint(
+                label = when (ep.tier) {
+                    NetworkAddresses.AccessTier.LOCAL -> "本机回路"
+                    NetworkAddresses.AccessTier.LAN -> ep.interfaceName
+                    NetworkAddresses.AccessTier.OTHER -> ep.interfaceName
+                },
+                url = "http://${ep.host}:$p$STREAM_PATH",
+                host = ep.host,
+                tier = ep.tier,
+            )
         }
-        return lines
     }
 }

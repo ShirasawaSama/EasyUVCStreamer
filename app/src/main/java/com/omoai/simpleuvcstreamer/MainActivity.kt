@@ -1,25 +1,32 @@
 package com.omoai.simpleuvcstreamer
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.LayoutInflater
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
 import android.widget.ImageView
-import android.widget.Spinner
+import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.card.MaterialCardView
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import com.omoai.simpleuvcstreamer.preview.FramePreviewController
 import com.omoai.simpleuvcstreamer.stream.HttpStreamController
+import com.omoai.simpleuvcstreamer.stream.NetworkAddresses
 import com.omoai.simpleuvcstreamer.ui.SafeArea
 import com.omoai.simpleuvcstreamer.usb.UsbDeviceMonitor
 import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
@@ -40,16 +47,17 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
     private lateinit var tvStatus: TextView
     private lateinit var tvFps: TextView
-    private lateinit var tvPreviewHint: TextView
     private lateinit var switchStream: MaterialSwitch
     private lateinit var switchPreview: MaterialSwitch
-    private lateinit var spinnerDevice: Spinner
-    private lateinit var spinnerResolution: Spinner
+    private lateinit var previewContainer: MaterialCardView
+    private lateinit var dropdownDevice: AutoCompleteTextView
+    private lateinit var dropdownResolution: AutoCompleteTextView
     private lateinit var imagePreview: ImageView
     private lateinit var editHttpPort: TextInputEditText
     private lateinit var btnApplyHttpPort: MaterialButton
     private lateinit var tvHttpState: TextView
-    private lateinit var tvHttpUrls: TextView
+    private lateinit var listAccessUrls: LinearLayout
+    private lateinit var tvHttpNoUrls: TextView
 
     private lateinit var usbManager: UsbManager
     private lateinit var session: UvcSession
@@ -58,19 +66,23 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private lateinit var httpStream: HttpStreamController
 
     private var uvcDevices: List<UsbDevice> = emptyList()
+    private var resolutionLabels: List<String> = emptyList()
     private var suppressDeviceCallback = false
     private var suppressResolutionCallback = false
     private var pendingStartAfterPermission = false
+    private var lastAccessSignature: String = ""
+
+    private var lastHttpStateText: String = ""
 
     private val fpsHandler = Handler(Looper.getMainLooper())
     private val fpsRunnable = object : Runnable {
         override fun run() {
             if (session.isStreaming && UvcNative.isLibLoaded) {
                 updateFpsText(session.frameCountPerSecond())
-            } else {
+            } else if (::tvFps.isInitialized) {
                 tvFps.visibility = View.GONE
             }
-            refreshHttpUi()
+            refreshHttpUi(forceList = false)
             fpsHandler.postDelayed(this, 1000)
         }
     }
@@ -84,16 +96,17 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
         tvStatus = findViewById(R.id.tvStatus)
         tvFps = findViewById(R.id.tvFps)
-        tvPreviewHint = findViewById(R.id.tvPreviewHint)
         switchStream = findViewById(R.id.switchStream)
         switchPreview = findViewById(R.id.switchPreview)
-        spinnerDevice = findViewById(R.id.spinnerDevice)
-        spinnerResolution = findViewById(R.id.spinnerResolution)
+        previewContainer = findViewById(R.id.previewContainer)
+        dropdownDevice = findViewById(R.id.dropdownDevice)
+        dropdownResolution = findViewById(R.id.dropdownResolution)
         imagePreview = findViewById(R.id.imagePreview)
         editHttpPort = findViewById(R.id.editHttpPort)
         btnApplyHttpPort = findViewById(R.id.btnApplyHttpPort)
         tvHttpState = findViewById(R.id.tvHttpState)
-        tvHttpUrls = findViewById(R.id.tvHttpUrls)
+        listAccessUrls = findViewById(R.id.listAccessUrls)
+        tvHttpNoUrls = findViewById(R.id.tvHttpNoUrls)
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         session = UvcSession(usbManager)
@@ -103,7 +116,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         if (!UvcNative.isLibLoaded) {
             updateStatus(getString(R.string.status_lib_missing))
             FileLogger.log("FATAL: Library not loaded")
-            refreshHttpUi()
+            refreshHttpUi(forceList = true)
             return
         }
 
@@ -114,7 +127,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         } catch (t: Throwable) {
             FileLogger.log("nativeInit CRASHED: ${t.message}")
             updateStatus(getString(R.string.status_init_crash))
-            refreshHttpUi()
+            refreshHttpUi(forceList = true)
             return
         }
 
@@ -130,14 +143,14 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
                 false
             }
         }
-        refreshHttpUi()
+        refreshHttpUi(forceList = true)
 
         switchPreview.isChecked = false
-        tvPreviewHint.visibility = View.VISIBLE
+        previewContainer.visibility = View.GONE
         switchPreview.setOnCheckedChangeListener { _, checked ->
             FileLogger.log("Preview switch: $checked")
             previewController.setEnabled(checked)
-            tvPreviewHint.visibility = if (checked) View.GONE else View.VISIBLE
+            previewContainer.visibility = if (checked) View.VISIBLE else View.GONE
         }
 
         switchStream.setOnCheckedChangeListener { _, isChecked ->
@@ -148,7 +161,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         usbMonitor = UsbDeviceMonitor(this, ACTION_USB_PERMISSION, this)
         usbMonitor.register()
 
-        bindSpinners()
+        bindDropdowns()
         refreshDeviceList()
         fpsHandler.post(fpsRunnable)
     }
@@ -168,27 +181,116 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             if (ok) getString(R.string.status_http_ok, p)
             else getString(R.string.status_http_fail, p)
         )
-        refreshHttpUi()
+        lastAccessSignature = ""
+        lastHttpStateText = ""
+        refreshHttpUi(forceList = true)
     }
 
-    private fun refreshHttpUi() {
+    private fun refreshHttpUi(forceList: Boolean = false) {
         runOnUiThread {
             if (!::httpStream.isInitialized) return@runOnUiThread
             val running = httpStream.isRunning
             val port = if (running) UvcNative.nativeGetHttpServerPort() else httpStream.port
             val clients = httpStream.clientCount
-            tvHttpState.text = if (running) {
+            val state = if (running) {
                 getString(R.string.http_running, port, clients)
             } else {
                 getString(R.string.http_stopped, port)
             }
-            val urls = httpStream.accessLines()
-            tvHttpUrls.text = if (urls.isEmpty()) {
-                getString(R.string.http_no_urls)
-            } else {
-                urls.joinToString("\n")
+            // Avoid setText when unchanged — prevents layout/focus scroll fights.
+            if (state != lastHttpStateText) {
+                lastHttpStateText = state
+                tvHttpState.text = state
             }
+            if (forceList) {
+                lastAccessSignature = ""
+            }
+            renderAccessList(httpStream.accessEndpoints())
         }
+    }
+
+    private fun renderAccessList(endpoints: List<HttpStreamController.AccessEndpoint>) {
+        val signature = endpoints.joinToString("|") { "${it.tier}:${it.url}" }
+        if (signature == lastAccessSignature && listAccessUrls.childCount > 0) {
+            tvHttpNoUrls.visibility = if (endpoints.isEmpty()) View.VISIBLE else View.GONE
+            return
+        }
+        lastAccessSignature = signature
+        listAccessUrls.removeAllViews()
+
+        if (endpoints.isEmpty()) {
+            tvHttpNoUrls.visibility = View.VISIBLE
+            return
+        }
+        tvHttpNoUrls.visibility = View.GONE
+
+        val inflater = LayoutInflater.from(this)
+        var lastTier: NetworkAddresses.AccessTier? = null
+        for (ep in endpoints) {
+            if (ep.tier != lastTier) {
+                lastTier = ep.tier
+                val header = inflater.inflate(R.layout.item_access_group, listAccessUrls, false) as TextView
+                header.text = when (ep.tier) {
+                    NetworkAddresses.AccessTier.LAN -> getString(R.string.http_group_lan)
+                    NetworkAddresses.AccessTier.OTHER -> getString(R.string.http_group_other)
+                    NetworkAddresses.AccessTier.LOCAL -> getString(R.string.http_group_local)
+                }
+                header.setTextColor(
+                    ContextCompat.getColor(
+                        this,
+                        when (ep.tier) {
+                            NetworkAddresses.AccessTier.LAN -> R.color.signal
+                            NetworkAddresses.AccessTier.OTHER -> R.color.text_secondary
+                            NetworkAddresses.AccessTier.LOCAL -> R.color.text_muted
+                        }
+                    )
+                )
+                listAccessUrls.addView(header)
+            }
+
+            val row = inflater.inflate(R.layout.item_access_url, listAccessUrls, false)
+            val badge = row.findViewById<TextView>(R.id.tvAccessBadge)
+            val label = row.findViewById<TextView>(R.id.tvAccessLabel)
+            val urlView = row.findViewById<TextView>(R.id.tvAccessUrl)
+            val hint = row.findViewById<TextView>(R.id.tvAccessHint)
+
+            label.text = "${ep.label} · ${ep.host}"
+            urlView.text = ep.url
+
+            when (ep.tier) {
+                NetworkAddresses.AccessTier.LAN -> {
+                    row.setBackgroundResource(R.drawable.bg_access_row_lan)
+                    badge.visibility = View.VISIBLE
+                    badge.text = getString(R.string.http_badge_recommend)
+                    urlView.setTextColor(ContextCompat.getColor(this, R.color.signal))
+                    hint.text = getString(R.string.http_hint_lan)
+                    hint.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
+                }
+                NetworkAddresses.AccessTier.OTHER -> {
+                    row.setBackgroundResource(R.drawable.bg_access_row_other)
+                    badge.visibility = View.GONE
+                    urlView.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
+                    hint.text = getString(R.string.http_hint_other)
+                    hint.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
+                }
+                NetworkAddresses.AccessTier.LOCAL -> {
+                    row.setBackgroundResource(R.drawable.bg_access_row_local)
+                    badge.visibility = View.GONE
+                    urlView.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
+                    hint.text = getString(R.string.http_hint_local)
+                    hint.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
+                }
+            }
+
+            row.setOnClickListener { copyUrl(ep.url) }
+            listAccessUrls.addView(row)
+        }
+    }
+
+    private fun copyUrl(url: String) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("stream", url))
+        Toast.makeText(this, R.string.http_copied, Toast.LENGTH_SHORT).show()
     }
 
     override fun onDeviceAttached() = refreshDeviceList()
@@ -214,31 +316,16 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
     }
 
-    private fun bindSpinners() {
-        spinnerDevice.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                if (suppressDeviceCallback) return
-                val device = uvcDevices.getOrNull(pos) ?: return
-                prepareDevice(device, startStream = switchStream.isChecked)
-            }
-
-            override fun onNothingSelected(p: AdapterView<*>?) {}
+    private fun bindDropdowns() {
+        dropdownDevice.setOnItemClickListener { _, _, pos, _ ->
+            if (suppressDeviceCallback) return@setOnItemClickListener
+            val device = uvcDevices.getOrNull(pos) ?: return@setOnItemClickListener
+            prepareDevice(device, startStream = switchStream.isChecked)
         }
-
-        spinnerResolution.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                if (suppressResolutionCallback) return
-                if (!session.isStreaming) return
-                applySelectedResolution()
-            }
-
-            override fun onNothingSelected(p: AdapterView<*>?) {}
-        }
-    }
-
-    private fun stringAdapter(items: List<String>): ArrayAdapter<String> {
-        return ArrayAdapter(this, R.layout.item_spinner, items).also {
-            it.setDropDownViewResource(R.layout.item_spinner_dropdown)
+        dropdownResolution.setOnItemClickListener { _, _, pos, _ ->
+            if (suppressResolutionCallback) return@setOnItemClickListener
+            if (!session.isStreaming) return@setOnItemClickListener
+            applySelectedResolution(pos)
         }
     }
 
@@ -251,9 +338,11 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         val keepIndex = uvcDevices.indexOfFirst { it.deviceName == previousName }.coerceAtLeast(0)
 
         suppressDeviceCallback = true
-        spinnerDevice.adapter = stringAdapter(labels)
+        dropdownDevice.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
         if (labels.isNotEmpty()) {
-            spinnerDevice.setSelection(keepIndex, false)
+            dropdownDevice.setText(labels[keepIndex], false)
+        } else {
+            dropdownDevice.setText("", false)
         }
         suppressDeviceCallback = false
 
@@ -264,7 +353,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             return
         }
 
-        val selected = uvcDevices.getOrNull(spinnerDevice.selectedItemPosition) ?: uvcDevices.first()
+        val selected = uvcDevices.getOrNull(keepIndex) ?: uvcDevices.first()
         prepareDevice(selected, startStream = switchStream.isChecked)
     }
 
@@ -295,7 +384,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             return
         }
 
-        val resList = loadResolutionsIntoSpinner(session.loadResolutions())
+        val resList = loadResolutionsIntoDropdown(session.loadResolutions())
         if (resList.isEmpty()) {
             updateStatus(getString(R.string.status_no_mjpeg))
             setSwitchChecked(false)
@@ -308,19 +397,25 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
     }
 
-    private fun loadResolutionsIntoSpinner(resList: List<String>): List<String> {
+    private fun loadResolutionsIntoDropdown(resList: List<String>): List<String> {
+        resolutionLabels = resList
         suppressResolutionCallback = true
-        spinnerResolution.adapter = stringAdapter(resList)
+        dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, resList))
         if (resList.isNotEmpty()) {
-            spinnerResolution.setSelection(Resolution.preferredIndex(resList), false)
+            val idx = Resolution.preferredIndex(resList)
+            dropdownResolution.setText(resList[idx], false)
+        } else {
+            dropdownResolution.setText("", false)
         }
         suppressResolutionCallback = false
         return resList
     }
 
     private fun clearResolutions() {
+        resolutionLabels = emptyList()
         suppressResolutionCallback = true
-        spinnerResolution.adapter = stringAdapter(emptyList())
+        dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, emptyList<String>()))
+        dropdownResolution.setText("", false)
         suppressResolutionCallback = false
     }
 
@@ -331,15 +426,21 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             updateStatus(getString(R.string.status_no_device))
             return
         }
-        val device = uvcDevices.getOrNull(spinnerDevice.selectedItemPosition) ?: run {
+        val label = dropdownDevice.text?.toString()
+        val index = uvcDevices.indexOfFirst { UvcDeviceFinder.labelFor(it) == label }.coerceAtLeast(0)
+        val device = uvcDevices.getOrNull(index) ?: run {
             setSwitchChecked(false)
             return
         }
         prepareDevice(device, startStream = true)
     }
 
-    private fun applySelectedResolution() {
-        val resLabel = spinnerResolution.selectedItem?.toString()
+    private fun applySelectedResolution(forcedIndex: Int? = null) {
+        val resLabel = if (forcedIndex != null) {
+            resolutionLabels.getOrNull(forcedIndex)
+        } else {
+            dropdownResolution.text?.toString()
+        }
         val size = resLabel?.let { Resolution.parseSize(it) }
         if (size == null) {
             FileLogger.log("applySelectedResolution: no resolution selected")
@@ -393,7 +494,9 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     override fun onDestroy() {
         super.onDestroy()
         fpsHandler.removeCallbacks(fpsRunnable)
-        previewController.release()
+        if (::previewController.isInitialized) {
+            previewController.release()
+        }
         if (::usbMonitor.isInitialized) {
             usbMonitor.unregister()
         }

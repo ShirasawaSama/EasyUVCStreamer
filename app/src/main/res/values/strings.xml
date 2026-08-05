@@ -4,7 +4,6 @@
     <string name="brand_subtitle">USB 摄像头 · MJPEG 直推</string>
 
     <string name="preview_content_description">摄像头预览画面</string>
-    <string name="preview_placeholder">预览默认关闭，开启后在此显示</string>
 
     <string name="section_capture">采集</string>
     <string name="section_http">推流</string>
@@ -14,16 +13,22 @@
     <string name="switch_stream">开始采集</string>
     <string name="switch_preview">本机预览（费电，默认关）</string>
 
-    <string name="http_section_title">网络推流</string>
     <string name="http_port_hint">端口</string>
     <string name="http_apply_port">应用</string>
-    <string name="http_urls_title">可访问地址（可长按复制）</string>
+    <string name="http_urls_title">可访问地址</string>
     <string name="http_no_urls">暂无可用地址</string>
+    <string name="http_tap_to_copy">点按复制链接</string>
+    <string name="http_copied">已复制到剪贴板</string>
     <string name="http_running">推流服务运行中 · 端口 %1$d · 客户端 %2$d</string>
     <string name="http_stopped">推流服务未运行 · 端口 %1$d</string>
-    <string name="http_access_preview">预览页</string>
-    <string name="http_access_stream">直链</string>
-    <string name="http_access_local">本机</string>
+
+    <string name="http_group_lan">局域网（推荐）</string>
+    <string name="http_group_other">其他内网（10.x 等）</string>
+    <string name="http_group_local">仅本机</string>
+    <string name="http_badge_recommend">推荐</string>
+    <string name="http_hint_lan">同 Wi‑Fi 设备可访问</string>
+    <string name="http_hint_other">可能是 USB / 蜂窝内网，同网设备未必能连</string>
+    <string name="http_hint_local">只有这台手机自己能打开</string>
 
     <string name="status_lib_missing">原生库加载失败</string>
     <string name="status_init_crash">原生初始化崩溃</string>

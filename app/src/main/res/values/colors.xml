@@ -3,7 +3,6 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 
-    <!-- Broadcast / encoder console -->
     <color name="ink">#FF0B0F14</color>
     <color name="ink_elevated">#FF121821</color>
     <color name="panel">#FF171E29</color>
@@ -12,6 +11,7 @@
 
     <color name="signal">#FF2EE6A6</color>
     <color name="signal_dim">#332EE6A6</color>
+    <color name="signal_soft">#1A2EE6A6</color>
     <color name="amber">#FFF0B429</color>
     <color name="danger">#FFFF6B6B</color>
 
@@ -20,4 +20,11 @@
     <color name="text_muted">#FF5C677A</color>
 
     <color name="switch_track_off">#FF2A3444</color>
+
+    <color name="access_lan_bg">#FF13261F</color>
+    <color name="access_lan_stroke">#FF2EE6A6</color>
+    <color name="access_other_bg">#FF121821</color>
+    <color name="access_other_stroke">#FF2A3444</color>
+    <color name="access_local_bg">#FF0E1218</color>
+    <color name="access_local_stroke">#FF1E2633</color>
 </resources>
