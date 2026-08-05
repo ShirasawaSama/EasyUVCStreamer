@@ -49,4 +49,5 @@
     <string name="status_http_fail">HTTP 启动失败 :%1$d</string>
     <string name="status_fps">帧率 %1$d</string>
     <string name="status_fps_idle">帧率 —</string>
+    <string name="perm_rationale_mic">USB 摄像头常带麦克风；授权录音可消除系统提示，并便于后续采集 USB 音频。</string>
 </resources>

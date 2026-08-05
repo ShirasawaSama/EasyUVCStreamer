@@ -18,6 +18,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
@@ -30,6 +31,7 @@ import com.omoai.simpleuvcstreamer.stream.NetworkAddresses
 import com.omoai.simpleuvcstreamer.ui.SafeArea
 import com.omoai.simpleuvcstreamer.usb.UsbDeviceMonitor
 import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
+import com.omoai.simpleuvcstreamer.util.AppPermissions
 import com.omoai.simpleuvcstreamer.util.FileLogger
 import com.omoai.simpleuvcstreamer.uvc.Resolution
 import com.omoai.simpleuvcstreamer.uvc.UvcNative
@@ -73,6 +75,16 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private var lastAccessSignature: String = ""
 
     private var lastHttpStateText: String = ""
+
+    private val runtimePermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            FileLogger.log("Runtime permissions: $result")
+            val denied = result.filterValues { !it }.keys
+            if (denied.isNotEmpty()) {
+                FileLogger.log("Permissions denied: $denied (MJPEG video can still work)")
+            }
+            startUsbSession()
+        }
 
     private val fpsHandler = Handler(Looper.getMainLooper())
     private val fpsRunnable = object : Runnable {
@@ -158,12 +170,27 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             if (isChecked) startStreaming() else stopStreaming()
         }
 
-        usbMonitor = UsbDeviceMonitor(this, ACTION_USB_PERMISSION, this)
-        usbMonitor.register()
+        ensureRuntimePermissionsThenStartUsb()
+        fpsHandler.post(fpsRunnable)
+    }
 
+    private fun ensureRuntimePermissionsThenStartUsb() {
+        val missing = AppPermissions.missing(this)
+        if (missing.isEmpty()) {
+            startUsbSession()
+            return
+        }
+        FileLogger.log("Requesting permissions: ${missing.toList()}")
+        runtimePermissionLauncher.launch(missing)
+    }
+
+    private fun startUsbSession() {
+        if (!::usbMonitor.isInitialized) {
+            usbMonitor = UsbDeviceMonitor(this, ACTION_USB_PERMISSION, this)
+            usbMonitor.register()
+        }
         bindDropdowns()
         refreshDeviceList()
-        fpsHandler.post(fpsRunnable)
     }
 
     private fun applyHttpPortFromUi() {
