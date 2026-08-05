@@ -7,8 +7,11 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.Spinner
 import android.widget.TextView
@@ -16,6 +19,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.omoai.simpleuvcstreamer.preview.FramePreviewController
+import com.omoai.simpleuvcstreamer.stream.HttpStreamController
 import com.omoai.simpleuvcstreamer.ui.SafeArea
 import com.omoai.simpleuvcstreamer.usb.UsbDeviceMonitor
 import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
@@ -25,7 +29,7 @@ import com.omoai.simpleuvcstreamer.uvc.UvcNative
 import com.omoai.simpleuvcstreamer.uvc.UvcSession
 
 /**
- * Thin UI layer. Streaming main-line is raw MJPEG via [UvcSession]/
+ * Thin UI layer. Streaming main-line is raw MJPEG via [UvcSession] + HTTP push.
  * Preview is opt-in and off by default (decode only when enabled).
  */
 class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
@@ -40,11 +44,16 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private lateinit var spinnerDevice: Spinner
     private lateinit var spinnerResolution: Spinner
     private lateinit var imagePreview: ImageView
+    private lateinit var editHttpPort: EditText
+    private lateinit var btnApplyHttpPort: Button
+    private lateinit var tvHttpState: TextView
+    private lateinit var tvHttpUrls: TextView
 
     private lateinit var usbManager: UsbManager
     private lateinit var session: UvcSession
     private lateinit var usbMonitor: UsbDeviceMonitor
     private lateinit var previewController: FramePreviewController
+    private lateinit var httpStream: HttpStreamController
 
     private var uvcDevices: List<UsbDevice> = emptyList()
     private var suppressDeviceCallback = false
@@ -57,6 +66,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             if (session.isStreaming && UvcNative.isLibLoaded) {
                 updateFpsText(session.frameCountPerSecond())
             }
+            refreshHttpUi()
             fpsHandler.postDelayed(this, 1000)
         }
     }
@@ -74,14 +84,20 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         spinnerDevice = findViewById(R.id.spinnerDevice)
         spinnerResolution = findViewById(R.id.spinnerResolution)
         imagePreview = findViewById(R.id.imagePreview)
+        editHttpPort = findViewById(R.id.editHttpPort)
+        btnApplyHttpPort = findViewById(R.id.btnApplyHttpPort)
+        tvHttpState = findViewById(R.id.tvHttpState)
+        tvHttpUrls = findViewById(R.id.tvHttpUrls)
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         session = UvcSession(usbManager)
         previewController = FramePreviewController(imagePreview) { session.isStreaming }
+        httpStream = HttpStreamController(this)
 
         if (!UvcNative.isLibLoaded) {
             updateStatus("ERR: LIB NOT LOADED")
             FileLogger.log("FATAL: Library not loaded")
+            refreshHttpUi()
             return
         }
 
@@ -92,8 +108,24 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         } catch (t: Throwable) {
             FileLogger.log("nativeInit CRASHED: ${t.message}")
             updateStatus("Native Init Crash")
+            refreshHttpUi()
             return
         }
+
+        // HTTP server auto-starts by default (port persisted / 8080).
+        editHttpPort.setText(httpStream.port.toString())
+        val httpOk = httpStream.ensureStarted()
+        FileLogger.log("HTTP auto-start ok=$httpOk port=${httpStream.port}")
+        btnApplyHttpPort.setOnClickListener { applyHttpPortFromUi() }
+        editHttpPort.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                applyHttpPortFromUi()
+                true
+            } else {
+                false
+            }
+        }
+        refreshHttpUi()
 
         // Preview stays off unless user enables it — no decode on main path.
         switchPreview.isChecked = false
@@ -113,6 +145,41 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         bindSpinners()
         refreshDeviceList()
         fpsHandler.post(fpsRunnable)
+    }
+
+    private fun applyHttpPortFromUi() {
+        val raw = editHttpPort.text?.toString()?.trim().orEmpty()
+        val p = raw.toIntOrNull()
+        if (p == null || p !in 1..65535) {
+            updateStatus("Invalid HTTP port")
+            editHttpPort.setText(httpStream.port.toString())
+            refreshHttpUi()
+            return
+        }
+        val ok = httpStream.applyPort(p)
+        editHttpPort.setText(httpStream.port.toString())
+        updateStatus(if (ok) "HTTP on :$p" else "HTTP start failed :$p")
+        refreshHttpUi()
+    }
+
+    private fun refreshHttpUi() {
+        runOnUiThread {
+            if (!::httpStream.isInitialized) return@runOnUiThread
+            val running = httpStream.isRunning
+            val port = if (running) UvcNative.nativeGetHttpServerPort() else httpStream.port
+            val clients = httpStream.clientCount
+            tvHttpState.text = if (running) {
+                "HTTP: 运行中 · 端口 $port · 客户端 $clients"
+            } else {
+                "HTTP: 未运行 · 端口 $port"
+            }
+            val urls = httpStream.accessLines()
+            tvHttpUrls.text = if (urls.isEmpty()) {
+                "暂无可用地址"
+            } else {
+                urls.joinToString("\n")
+            }
+        }
     }
 
     override fun onDeviceAttached() = refreshDeviceList()
@@ -325,6 +392,9 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         previewController.release()
         if (::usbMonitor.isInitialized) {
             usbMonitor.unregister()
+        }
+        if (::httpStream.isInitialized) {
+            httpStream.stop()
         }
         if (::session.isInitialized) {
             session.close()

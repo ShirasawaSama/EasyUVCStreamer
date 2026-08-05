@@ -1,4 +1,5 @@
 #include "uvc_engine.h"
+#include "http_mjpeg_server.h"
 
 #include <jni.h>
 #include <string>
@@ -67,6 +68,45 @@ JNIEXPORT jbyteArray JNICALL
 Java_com_omoai_simpleuvcstreamer_uvc_UvcNative_nativeTakeLatestFrame(JNIEnv *env, jobject thiz) {
     (void) thiz;
     return uvc_engine::take_latest_frame(env);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_omoai_simpleuvcstreamer_uvc_UvcNative_nativeStartHttpServer(
+        JNIEnv *env, jobject thiz, jint port) {
+    (void) env;
+    (void) thiz;
+    return http_mjpeg_server::start(port);
+}
+
+JNIEXPORT void JNICALL
+Java_com_omoai_simpleuvcstreamer_uvc_UvcNative_nativeStopHttpServer(JNIEnv *env, jobject thiz) {
+    (void) env;
+    (void) thiz;
+    http_mjpeg_server::stop();
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_omoai_simpleuvcstreamer_uvc_UvcNative_nativeIsHttpServerRunning(
+        JNIEnv *env, jobject thiz) {
+    (void) env;
+    (void) thiz;
+    return http_mjpeg_server::is_running() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_omoai_simpleuvcstreamer_uvc_UvcNative_nativeGetHttpServerPort(
+        JNIEnv *env, jobject thiz) {
+    (void) env;
+    (void) thiz;
+    return http_mjpeg_server::port();
+}
+
+JNIEXPORT jint JNICALL
+Java_com_omoai_simpleuvcstreamer_uvc_UvcNative_nativeGetHttpClientCount(
+        JNIEnv *env, jobject thiz) {
+    (void) env;
+    (void) thiz;
+    return http_mjpeg_server::client_count();
 }
 
 }  // extern "C"

@@ -26,4 +26,10 @@ object UvcNative {
     external fun nativeClose()
     external fun nativeSetPreviewEnabled(enabled: Boolean)
     external fun nativeTakeLatestFrame(): ByteArray?
+
+    external fun nativeStartHttpServer(port: Int): Int
+    external fun nativeStopHttpServer()
+    external fun nativeIsHttpServerRunning(): Boolean
+    external fun nativeGetHttpServerPort(): Int
+    external fun nativeGetHttpClientCount(): Int
 }

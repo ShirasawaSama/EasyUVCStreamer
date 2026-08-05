@@ -29,6 +29,63 @@
             android:textSize="18sp"
             android:layout_marginBottom="16dp" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/http_section_title"
+            android:textStyle="bold"
+            android:textSize="16sp"
+            android:layout_marginBottom="8dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/http_port_hint"
+                android:layout_marginEnd="8dp" />
+
+            <EditText
+                android:id="@+id/editHttpPort"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:inputType="number"
+                android:maxLength="5"
+                android:hint="@string/http_port_hint"
+                android:importantForAutofill="no"
+                android:imeOptions="actionDone" />
+
+            <Button
+                android:id="@+id/btnApplyHttpPort"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/http_apply_port" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvHttpState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="14sp"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:id="@+id/tvHttpUrls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textIsSelectable="true"
+            android:textSize="13sp"
+            android:fontFamily="monospace"
+            android:lineSpacingExtra="2dp"
+            android:layout_marginBottom="16dp" />
+
         <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switchStream"
             android:layout_width="match_parent"

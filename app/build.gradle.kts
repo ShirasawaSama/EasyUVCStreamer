@@ -8,7 +8,8 @@ android {
 
     defaultConfig {
         applicationId = "com.omoai.simpleuvcstreamer"
-        minSdk = 25
+        // API 28+: libhv (FORTIFY) needs __sendto_chk; keep minSdk in sync with NDK platform.
+        minSdk = 28
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
@@ -29,7 +30,7 @@ android {
                     "-DCMAKE_TOOLCHAIN_FILE=$vcpkgRoot/scripts/buildsystems/vcpkg.cmake",
                     "-DVCPKG_MANIFEST_MODE=ON",
                     "-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=$ndkDir/build/cmake/android.toolchain.cmake",
-                    "-DANDROID_PLATFORM=android-24",
+                    "-DANDROID_PLATFORM=android-28",
                     "-DANDROID_STL=c++_shared"
                 )
             }

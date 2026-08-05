@@ -1,4 +1,7 @@
 <resources>
     <string name="app_name">SimpleUVCStreamer</string>
     <string name="preview_content_description">UVC preview</string>
+    <string name="http_section_title">HTTP MJPEG 推流</string>
+    <string name="http_port_hint">端口</string>
+    <string name="http_apply_port">应用</string>
 </resources>

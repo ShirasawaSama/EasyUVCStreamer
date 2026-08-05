@@ -13,10 +13,31 @@ namespace {
 std::atomic<int> g_frame_count{0};
 std::atomic<int> g_callback_seq{0};
 std::atomic<bool> g_preview_enabled{false};
+std::atomic<int> g_http_subscribers{0};
 
 std::mutex g_preview_mu;
 std::vector<uint8_t> g_latest_jpeg;
 bool g_has_latest = false;
+
+std::mutex g_http_mu;
+std::vector<uint8_t> g_http_jpeg;
+uint64_t g_http_seq = 0;
+bool g_http_has = false;
+
+void replace_slot(std::mutex &mu,
+                  std::vector<uint8_t> &buf,
+                  bool &has,
+                  uint64_t *seq,
+                  const void *data,
+                  size_t len) {
+    std::lock_guard<std::mutex> lock(mu);
+    buf.resize(len);
+    std::memcpy(buf.data(), data, len);
+    has = true;
+    if (seq) {
+        ++(*seq);
+    }
+}
 
 }  // namespace
 
@@ -30,22 +51,26 @@ void on_frame(uvc_frame_t *frame) {
              frame ? (int) frame->frame_format : -1);
     }
 
-    // Preview is opt-in: skip JPEG copy entirely when off (main-line = zero extra copy).
-    if (!g_preview_enabled.load(std::memory_order_relaxed)) {
+    const bool want_http = g_http_subscribers.load(std::memory_order_relaxed) > 0;
+    const bool want_preview = g_preview_enabled.load(std::memory_order_relaxed);
+    if (!want_http && !want_preview) {
         return;
     }
     if (!frame || !frame->data || frame->data_bytes == 0) {
         return;
     }
-    // Only stash MJPEG; other formats would need decode — not on main path.
     if (frame->frame_format != UVC_FRAME_FORMAT_MJPEG) {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(g_preview_mu);
-    g_latest_jpeg.resize(frame->data_bytes);
-    std::memcpy(g_latest_jpeg.data(), frame->data, frame->data_bytes);
-    g_has_latest = true;
+    if (want_http) {
+        replace_slot(g_http_mu, g_http_jpeg, g_http_has, &g_http_seq,
+                     frame->data, frame->data_bytes);
+    }
+    if (want_preview) {
+        replace_slot(g_preview_mu, g_latest_jpeg, g_has_latest, nullptr,
+                     frame->data, frame->data_bytes);
+    }
 }
 
 void set_preview_enabled(bool enabled) {
@@ -74,15 +99,50 @@ jbyteArray take_latest_frame(JNIEnv *env) {
             arr, 0, static_cast<jsize>(g_latest_jpeg.size()),
             reinterpret_cast<const jbyte *>(g_latest_jpeg.data()));
     g_has_latest = false;
-    // Keep capacity; clear logical content for next producer write.
     return arr;
+}
+
+void http_subscriber_add() {
+    g_http_subscribers.fetch_add(1, std::memory_order_relaxed);
+}
+
+void http_subscriber_remove() {
+    int prev = g_http_subscribers.fetch_sub(1, std::memory_order_relaxed);
+    if (prev <= 1) {
+        g_http_subscribers.store(0, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lock(g_http_mu);
+        g_http_jpeg.clear();
+        g_http_has = false;
+        // keep seq monotonic
+    }
+}
+
+int http_subscriber_count() {
+    return g_http_subscribers.load(std::memory_order_relaxed);
+}
+
+bool copy_http_frame_if_newer(uint64_t &last_seq, std::vector<uint8_t> &out) {
+    std::lock_guard<std::mutex> lock(g_http_mu);
+    if (!g_http_has || g_http_jpeg.empty() || g_http_seq == last_seq) {
+        return false;
+    }
+    out = g_http_jpeg;
+    last_seq = g_http_seq;
+    return true;
 }
 
 void clear() {
     g_preview_enabled.store(false, std::memory_order_relaxed);
-    std::lock_guard<std::mutex> lock(g_preview_mu);
-    g_latest_jpeg.clear();
-    g_has_latest = false;
+    {
+        std::lock_guard<std::mutex> lock(g_preview_mu);
+        g_latest_jpeg.clear();
+        g_has_latest = false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_http_mu);
+        g_http_jpeg.clear();
+        g_http_has = false;
+    }
 }
 
 void reset_counters() {

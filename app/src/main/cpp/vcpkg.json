@@ -1,6 +1,7 @@
 {
   "dependencies": [
     "libuvc",
-    "libusb"
+    "libusb",
+    "libhv"
   ]
 }
