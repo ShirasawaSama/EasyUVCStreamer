@@ -1,117 +1,63 @@
 package com.omoai.simpleuvcstreamer
 
-import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
-import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
-import android.os.*
-import android.util.Log
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.ImageView
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.materialswitch.MaterialSwitch
-import java.io.File
-import java.io.FileOutputStream
-import java.text.SimpleDateFormat
-import java.util.*
+import com.omoai.simpleuvcstreamer.preview.FramePreviewController
+import com.omoai.simpleuvcstreamer.ui.SafeArea
+import com.omoai.simpleuvcstreamer.usb.UsbDeviceMonitor
+import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
+import com.omoai.simpleuvcstreamer.util.FileLogger
+import com.omoai.simpleuvcstreamer.uvc.Resolution
+import com.omoai.simpleuvcstreamer.uvc.UvcNative
+import com.omoai.simpleuvcstreamer.uvc.UvcSession
 
-class MainActivity : AppCompatActivity() {
+/**
+ * Thin UI layer. Streaming main-line is raw MJPEG via [UvcSession]/
+ * Preview is opt-in and off by default (decode only when enabled).
+ */
+class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
     companion object {
-        private const val TAG = "UVCStreamer"
         private const val ACTION_USB_PERMISSION = "com.omoai.simpleuvcstreamer.USB_PERMISSION"
-        private var isLibLoaded = false
-
-        init {
-            try {
-                System.loadLibrary("simpleuvcstreamer")
-                isLibLoaded = true
-            } catch (t: Throwable) {
-                Log.e(TAG, "Library Load Failed", t)
-            }
-        }
     }
 
     private lateinit var tvStatus: TextView
     private lateinit var switchStream: MaterialSwitch
+    private lateinit var switchPreview: MaterialSwitch
     private lateinit var spinnerDevice: Spinner
     private lateinit var spinnerResolution: Spinner
+    private lateinit var imagePreview: ImageView
 
     private lateinit var usbManager: UsbManager
-    private var usbConnection: UsbDeviceConnection? = null
-    private var currentDevice: UsbDevice? = null
-    private var isStreaming = false
+    private lateinit var session: UvcSession
+    private lateinit var usbMonitor: UsbDeviceMonitor
+    private lateinit var previewController: FramePreviewController
+
+    private var uvcDevices: List<UsbDevice> = emptyList()
     private var suppressDeviceCallback = false
     private var suppressResolutionCallback = false
     private var pendingStartAfterPermission = false
 
-    private var uvcDevices: List<UsbDevice> = emptyList()
-
     private val fpsHandler = Handler(Looper.getMainLooper())
     private val fpsRunnable = object : Runnable {
         override fun run() {
-            if (isStreaming && isLibLoaded) {
-                val count = nativeGetFrameCount()
-                updateFpsText(count)
+            if (session.isStreaming && UvcNative.isLibLoaded) {
+                updateFpsText(session.frameCountPerSecond())
             }
             fpsHandler.postDelayed(this, 1000)
-        }
-    }
-
-    private fun fileLog(msg: String) {
-        Log.i(TAG, msg)
-        val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        val logLine = "[$time] $msg\n"
-        try {
-            val file = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                "uvc_debug.txt"
-            )
-            FileOutputStream(file, true).use { it.write(logLine.toByteArray()) }
-        } catch (e: Exception) {
-            Log.e(TAG, "File Log Failed", e)
-        }
-    }
-
-    private val usbReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            fileLog("USB Event: ${intent.action}")
-            when (intent.action) {
-                UsbManager.ACTION_USB_DEVICE_ATTACHED -> refreshDeviceList()
-                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    val device = intent.usbDeviceExtra()
-                    if (device != null && sameDevice(device, currentDevice)) {
-                        closeDevice()
-                        clearResolutions()
-                        updateStatus("Device detached")
-                    }
-                    refreshDeviceList()
-                }
-                ACTION_USB_PERMISSION -> {
-                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    fileLog("USB Permission Granted: $granted")
-                    val device = intent.usbDeviceExtra()
-                    if (granted && device != null) {
-                        val shouldStart = pendingStartAfterPermission || switchStream.isChecked
-                        pendingStartAfterPermission = false
-                        openDeviceAndLoadResolutions(device, startStream = shouldStart)
-                    } else {
-                        pendingStartAfterPermission = false
-                        setSwitchChecked(false)
-                        updateStatus("USB permission denied")
-                    }
-                }
-            }
         }
     }
 
@@ -119,71 +65,76 @@ class MainActivity : AppCompatActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        applySafeAreaInsets()
-        fileLog("--- App Started ---")
+        SafeArea.apply(this, R.id.main)
+        FileLogger.log("--- App Started ---")
 
         tvStatus = findViewById(R.id.tvStatus)
         switchStream = findViewById(R.id.switchStream)
+        switchPreview = findViewById(R.id.switchPreview)
         spinnerDevice = findViewById(R.id.spinnerDevice)
         spinnerResolution = findViewById(R.id.spinnerResolution)
+        imagePreview = findViewById(R.id.imagePreview)
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+        session = UvcSession(usbManager)
+        previewController = FramePreviewController(imagePreview) { session.isStreaming }
 
-        if (!isLibLoaded) {
+        if (!UvcNative.isLibLoaded) {
             updateStatus("ERR: LIB NOT LOADED")
-            fileLog("FATAL: Library not loaded")
+            FileLogger.log("FATAL: Library not loaded")
             return
         }
 
         try {
-            val res = nativeInit()
-            fileLog("nativeInit result: $res")
+            val res = UvcNative.nativeInit()
+            FileLogger.log("nativeInit result: $res")
             updateStatus("System Ready (Init: $res)")
         } catch (t: Throwable) {
-            fileLog("nativeInit CRASHED: ${t.message}")
+            FileLogger.log("nativeInit CRASHED: ${t.message}")
             updateStatus("Native Init Crash")
+            return
+        }
+
+        // Preview stays off unless user enables it — no decode on main path.
+        switchPreview.isChecked = false
+        switchPreview.setOnCheckedChangeListener { _, checked ->
+            FileLogger.log("Preview switch: $checked")
+            previewController.setEnabled(checked)
         }
 
         switchStream.setOnCheckedChangeListener { _, isChecked ->
-            fileLog("Switch changed: $isChecked")
+            FileLogger.log("Switch changed: $isChecked")
             if (isChecked) startStreaming() else stopStreaming()
         }
 
-        val filter = IntentFilter().apply {
-            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
-            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
-            addAction(ACTION_USB_PERMISSION)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(usbReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(usbReceiver, filter)
-        }
+        usbMonitor = UsbDeviceMonitor(this, ACTION_USB_PERMISSION, this)
+        usbMonitor.register()
 
         bindSpinners()
         refreshDeviceList()
         fpsHandler.post(fpsRunnable)
     }
 
-    private fun applySafeAreaInsets() {
-        val root = findViewById<View>(R.id.main)
-        val initialLeft = root.paddingLeft
-        val initialTop = root.paddingTop
-        val initialRight = root.paddingRight
-        val initialBottom = root.paddingBottom
+    override fun onDeviceAttached() = refreshDeviceList()
 
-        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-            val bars = insets.getInsets(
-                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
-            )
-            v.setPadding(
-                initialLeft + bars.left,
-                initialTop + bars.top,
-                initialRight + bars.right,
-                initialBottom + bars.bottom
-            )
-            insets
+    override fun onDeviceDetached(device: UsbDevice) {
+        if (UvcDeviceFinder.sameDevice(device, session.currentDevice)) {
+            session.close()
+            clearResolutions()
+            updateStatus("Device detached")
+        }
+        refreshDeviceList()
+    }
+
+    override fun onPermissionResult(device: UsbDevice?, granted: Boolean) {
+        if (granted && device != null) {
+            val shouldStart = pendingStartAfterPermission || switchStream.isChecked
+            pendingStartAfterPermission = false
+            openDeviceAndLoadResolutions(device, startStream = shouldStart)
+        } else {
+            pendingStartAfterPermission = false
+            setSwitchChecked(false)
+            updateStatus("USB permission denied")
         }
     }
 
@@ -201,7 +152,7 @@ class MainActivity : AppCompatActivity() {
         spinnerResolution.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 if (suppressResolutionCallback) return
-                if (!isStreaming) return
+                if (!session.isStreaming) return
                 applySelectedResolution()
             }
 
@@ -210,20 +161,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshDeviceList() {
-        val allDevices = usbManager.deviceList.values
-        uvcDevices = allDevices.filter { device ->
-            (0 until device.interfaceCount).any { i ->
-                device.getInterface(i).interfaceClass == 14 // USB_CLASS_VIDEO
-            }
-        }
+        uvcDevices = UvcDeviceFinder.listUvcDevices(usbManager)
+        FileLogger.log("UVC Device count: ${uvcDevices.size}")
 
-        fileLog("UVC Device count: ${uvcDevices.size} (Total USB: ${allDevices.size})")
-
-        val labels = uvcDevices.map {
-            "${it.productName ?: "Unknown Device"} (${it.vendorId}:${it.productId})"
-        }
-
-        val previousName = currentDevice?.deviceName
+        val labels = uvcDevices.map { UvcDeviceFinder.labelFor(it) }
+        val previousName = session.currentDevice?.deviceName
         val keepIndex = uvcDevices.indexOfFirst { it.deviceName == previousName }.coerceAtLeast(0)
 
         suppressDeviceCallback = true
@@ -236,37 +178,29 @@ class MainActivity : AppCompatActivity() {
         suppressDeviceCallback = false
 
         if (uvcDevices.isEmpty()) {
-            closeDevice()
+            session.close()
             clearResolutions()
             updateStatus("No UVC device")
             return
         }
 
-        // Auto-open selected device so resolutions are available before streaming
         val selected = uvcDevices.getOrNull(spinnerDevice.selectedItemPosition) ?: uvcDevices.first()
         prepareDevice(selected, startStream = switchStream.isChecked)
     }
 
     private fun prepareDevice(device: UsbDevice, startStream: Boolean) {
-        if (sameDevice(device, currentDevice) && usbConnection != null) {
-            if (startStream && !isStreaming) {
-                applySelectedResolution()
-            } else if (!startStream && isStreaming) {
-                stopStreaming()
+        if (UvcDeviceFinder.sameDevice(device, session.currentDevice) && session.isDeviceOpen) {
+            when {
+                startStream && !session.isStreaming -> applySelectedResolution()
+                !startStream && session.isStreaming -> stopStreaming()
             }
             return
         }
 
         if (!usbManager.hasPermission(device)) {
             pendingStartAfterPermission = startStream
-            fileLog("Requesting USB permission for ${device.productName}")
-            val intent = Intent(ACTION_USB_PERMISSION).apply {
-                putExtra(UsbManager.EXTRA_DEVICE, device)
-            }
-            val pi = PendingIntent.getBroadcast(
-                this, 0, intent, PendingIntent.FLAG_IMMUTABLE
-            )
-            usbManager.requestPermission(device, pi)
+            FileLogger.log("Requesting USB permission for ${device.productName}")
+            usbMonitor.requestPermission(usbManager, device)
             updateStatus("Waiting USB permission...")
             return
         }
@@ -275,12 +209,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openDeviceAndLoadResolutions(device: UsbDevice, startStream: Boolean) {
-        if (!openDevice(device)) {
+        if (!session.open(device)) {
             setSwitchChecked(false)
+            updateStatus("Open device failed")
             return
         }
 
-        val resList = loadResolutionsIntoSpinner()
+        val resList = loadResolutionsIntoSpinner(session.loadResolutions())
         if (resList.isEmpty()) {
             updateStatus("ERR: MJPEG Not Supported")
             setSwitchChecked(false)
@@ -293,49 +228,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openDevice(device: UsbDevice): Boolean {
-        fileLog("Opening device: ${device.deviceName}")
-        closeDevice()
-
-        val conn = usbManager.openDevice(device)
-        if (conn == null) {
-            fileLog("Failed to open UsbConnection")
-            updateStatus("Open device failed")
-            return false
-        }
-
-        // Claim each USB interface id once (Android exposes every altsetting as a UsbInterface).
-        // Only claim VideoControl / VideoStreaming; leave UAC alone.
-        val claimedIds = mutableSetOf<Int>()
-        for (i in 0 until device.interfaceCount) {
-            val intf = device.getInterface(i)
-            if (intf.interfaceClass != 14) continue // USB_CLASS_VIDEO
-            if (!claimedIds.add(intf.id)) continue
-            val ok = conn.claimInterface(intf, true)
-            fileLog(
-                "claimInterface if=${intf.id} class=${intf.interfaceClass}/" +
-                    "${intf.interfaceSubclass} -> $ok"
-            )
-        }
-
-        usbConnection = conn
-        currentDevice = device
-
-        val res = nativeOpenDevice(conn.fileDescriptor)
-        fileLog("nativeOpenDevice res: $res")
-        if (res != 0) {
-            updateStatus("nativeOpen failed: $res")
-            closeDevice()
-            return false
-        }
-        return true
-    }
-
-    private fun loadResolutionsIntoSpinner(): List<String> {
-        val resStr = nativeGetResolutions()
-        fileLog("Available resolutions: $resStr")
-        val resList = parseResolutions(resStr)
-
+    private fun loadResolutionsIntoSpinner(resList: List<String>): List<String> {
         suppressResolutionCallback = true
         spinnerResolution.adapter = ArrayAdapter(
             this,
@@ -345,38 +238,10 @@ class MainActivity : AppCompatActivity() {
             it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
         if (resList.isNotEmpty()) {
-            // Do NOT default to the largest mode — USB bandwidth often cannot sustain it (0 FPS).
-            spinnerResolution.setSelection(preferredResolutionIndex(resList), false)
+            spinnerResolution.setSelection(Resolution.preferredIndex(resList), false)
         }
         suppressResolutionCallback = false
         return resList
-    }
-
-    private fun parseResolutions(resStr: String): List<String> {
-        return resStr.split(";")
-            .map { it.trim() }
-            .filter { it.contains("x") }
-            .distinct()
-            .sortedWith(
-                compareByDescending<String> {
-                    val parts = it.split("x")
-                    parts[0].trim().toInt() * parts[1].trim().toInt()
-                }.thenByDescending {
-                    it.split("x")[0].trim().toInt()
-                }
-            )
-    }
-
-    private fun preferredResolutionIndex(resList: List<String>): Int {
-        val preferred = listOf(
-            "1280x720", "960x540", "800x600", "640x480", "640x360", "320x240"
-        )
-        for (p in preferred) {
-            val idx = resList.indexOf(p)
-            if (idx >= 0) return idx
-        }
-        // List is largest-first; fall back to the smallest (safest bandwidth).
-        return resList.lastIndex.coerceAtLeast(0)
     }
 
     private fun clearResolutions() {
@@ -391,97 +256,46 @@ class MainActivity : AppCompatActivity() {
 
     private fun startStreaming() {
         if (uvcDevices.isEmpty()) {
-            fileLog("startStreaming: No UVC devices")
+            FileLogger.log("startStreaming: No UVC devices")
             setSwitchChecked(false)
             updateStatus("No UVC device")
             return
         }
-
-        val selectedIdx = spinnerDevice.selectedItemPosition
-        val device = uvcDevices.getOrNull(selectedIdx)
-        if (device == null) {
+        val device = uvcDevices.getOrNull(spinnerDevice.selectedItemPosition) ?: run {
             setSwitchChecked(false)
             return
         }
-
         prepareDevice(device, startStream = true)
     }
 
     private fun applySelectedResolution() {
         val resLabel = spinnerResolution.selectedItem?.toString()
-        if (resLabel.isNullOrBlank()) {
-            fileLog("applySelectedResolution: no resolution selected")
+        val size = resLabel?.let { Resolution.parseSize(it) }
+        if (size == null) {
+            FileLogger.log("applySelectedResolution: no resolution selected")
             setSwitchChecked(false)
             updateStatus("Select a resolution first")
             return
         }
-
-        val parts = resLabel.split("x")
-        if (parts.size != 2) {
+        if (!session.isDeviceOpen) {
             setSwitchChecked(false)
             return
         }
 
-        val width = parts[0].trim().toIntOrNull()
-        val height = parts[1].trim().toIntOrNull()
-        if (width == null || height == null) {
-            setSwitchChecked(false)
-            return
-        }
-
-        if (currentDevice == null || usbConnection == null) {
-            fileLog("applySelectedResolution: device not open")
-            setSwitchChecked(false)
-            return
-        }
-
-        fileLog("Starting/switching stream to ${width}x${height}")
-        val startRes = nativeStartStream(width, height, 30)
-        fileLog("nativeStartStream result: $startRes")
+        val (width, height) = size
+        val startRes = session.startStream(width, height, 30)
         if (startRes == 0) {
-            isStreaming = true
             setSwitchChecked(true)
             updateStatus("Streaming: ${width}x${height}")
         } else {
-            isStreaming = false
             setSwitchChecked(false)
             updateStatus("Stream Error: $startRes (${width}x${height})")
         }
     }
 
     private fun stopStreaming() {
-        if (!isStreaming && usbConnection != null) {
-            // Already stopped; keep device open for resolution list
-            nativeStopStream()
-            updateStatus("Ready")
-            return
-        }
-        fileLog("Stopping stream (keep device open)...")
-        isStreaming = false
-        nativeStopStream()
+        session.stopStream()
         updateStatus("Ready")
-    }
-
-    private fun closeDevice() {
-        isStreaming = false
-        nativeClose()
-        val conn = usbConnection
-        val device = currentDevice
-        if (conn != null && device != null) {
-            val released = mutableSetOf<Int>()
-            for (i in 0 until device.interfaceCount) {
-                val intf = device.getInterface(i)
-                if (intf.interfaceClass != 14) continue
-                if (!released.add(intf.id)) continue
-                try {
-                    conn.releaseInterface(intf)
-                } catch (_: Exception) {
-                }
-            }
-        }
-        conn?.close()
-        usbConnection = null
-        currentDevice = null
     }
 
     private fun setSwitchChecked(checked: Boolean) {
@@ -489,22 +303,8 @@ class MainActivity : AppCompatActivity() {
         switchStream.setOnCheckedChangeListener(null)
         switchStream.isChecked = checked
         switchStream.setOnCheckedChangeListener { _, isChecked ->
-            fileLog("Switch changed: $isChecked")
+            FileLogger.log("Switch changed: $isChecked")
             if (isChecked) startStreaming() else stopStreaming()
-        }
-    }
-
-    private fun sameDevice(a: UsbDevice?, b: UsbDevice?): Boolean {
-        if (a == null || b == null) return false
-        return a.deviceName == b.deviceName
-    }
-
-    private fun Intent.usbDeviceExtra(): UsbDevice? {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            getParcelableExtra(UsbManager.EXTRA_DEVICE)
         }
     }
 
@@ -522,18 +322,12 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         fpsHandler.removeCallbacks(fpsRunnable)
-        try {
-            unregisterReceiver(usbReceiver)
-        } catch (_: Exception) {
+        previewController.release()
+        if (::usbMonitor.isInitialized) {
+            usbMonitor.unregister()
         }
-        closeDevice()
+        if (::session.isInitialized) {
+            session.close()
+        }
     }
-
-    private external fun nativeInit(): Int
-    private external fun nativeOpenDevice(fd: Int): Int
-    private external fun nativeGetResolutions(): String
-    private external fun nativeStartStream(width: Int, height: Int, fps: Int): Int
-    private external fun nativeStopStream()
-    private external fun nativeGetFrameCount(): Int
-    private external fun nativeClose()
 }

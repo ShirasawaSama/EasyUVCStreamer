@@ -18,18 +18,15 @@ if(ANDROID_NDK AND NOT DEFINED ENV{ANDROID_NDK_HOME})
     set(ENV{ANDROID_NDK_HOME} "${ANDROID_NDK}")
 endif()
 
-# Declares the project name.
 project(simpleuvcstreamer)
 
-# Find dependencies using vcpkg
 find_package(libuvc CONFIG REQUIRED)
 
-# libuvcConfig.cmake internally uses pkg_check_modules to find libusb-1.0
-# and defines PkgConfig::libusb as an imported target.
-# We can link to it directly if we need libusb symbols.
-
 add_library(${CMAKE_PROJECT_NAME} SHARED
-    simpleuvcstreamer.cpp
+    jni_bridge.cpp
+    uvc_engine.cpp
+    stream_negotiate.cpp
+    frame_pipeline.cpp
 )
 
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
