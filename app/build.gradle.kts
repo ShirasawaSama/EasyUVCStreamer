@@ -43,6 +43,8 @@ android {
             optimization {
                 enable = true
             }
+            // Local/distributable APK until a release keystore is configured.
+            signingConfig = signingConfigs.getByName("debug")
             ndk {
                 // Upload native symbols to Play / keep crash stacks useful.
                 debugSymbolLevel = "SYMBOL_TABLE"

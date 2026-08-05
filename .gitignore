@@ -12,5 +12,7 @@
 /captures
 .externalNativeBuild
 .cxx
+.kotlin
+.artifacts
 local.properties
 build
