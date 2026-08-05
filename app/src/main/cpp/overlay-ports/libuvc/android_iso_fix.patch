@@ -1,0 +1,81 @@
+--- a/include/libuvc/libuvc_internal.h
++++ b/include/libuvc/libuvc_internal.h
+@@ -224,7 +224,9 @@
+   this macro.
+  */
+ #ifndef LIBUVC_NUM_TRANSFER_BUFS
+-#if defined(__APPLE__) && defined(__MACH__)
++#if defined(__ANDROID__)
++#define LIBUVC_NUM_TRANSFER_BUFS 4
++#elif defined(__APPLE__) && defined(__MACH__)
+ #define LIBUVC_NUM_TRANSFER_BUFS 20
+ #else
+ #define LIBUVC_NUM_TRANSFER_BUFS 100
+--- a/src/stream.c
++++ b/src/stream.c
+@@ -37,6 +37,9 @@
+  */
+ 
+ #include "libuvc/libuvc.h"
++#ifdef __ANDROID__
++#include <android/log.h>
++#endif
+ #include "libuvc/libuvc_internal.h"
+ #include "errno.h"
+ 
+@@ -1181,9 +1184,15 @@
+         packets_per_transfer = (ctrl->dwMaxVideoFrameSize +
+                                 endpoint_bytes_per_packet - 1) / endpoint_bytes_per_packet;
+ 
++        /* Cap packets per URB. Android USBFS often returns ENOMEM above ~8-12. */
++#if defined(__ANDROID__)
++        if (packets_per_transfer > 8)
++          packets_per_transfer = 8;
++#else
+         /* But keep a reasonable limit: Otherwise we start dropping data */
+         if (packets_per_transfer > 32)
+           packets_per_transfer = 32;
++#endif
+         
+         total_transfer_size = packets_per_transfer * endpoint_bytes_per_packet;
+         break;
+@@ -1247,7 +1256,15 @@
+       transfer_id++) {
+     ret = libusb_submit_transfer(strmh->transfers[transfer_id]);
+     if (ret != UVC_SUCCESS) {
+-      UVC_DEBUG("libusb_submit_transfer failed: %d",ret);
++      UVC_DEBUG("libusb_submit_transfer failed: %d (id=%d)", ret, transfer_id);
++#if defined(__ANDROID__)
++      __android_log_print(ANDROID_LOG_ERROR, "libuvc",
++                          "libusb_submit_transfer failed: %d (id=%d, niso=%d)",
++                          ret, transfer_id,
++                          strmh->transfers[transfer_id]
++                              ? strmh->transfers[transfer_id]->num_iso_packets
++                              : -1);
++#endif
+       break;
+     }
+   }
+@@ -1258,7 +1275,10 @@
+       libusb_free_transfer ( strmh->transfers[transfer_id]);
+       strmh->transfers[transfer_id] = 0;
+     }
++#if !defined(__ANDROID__)
++    /* Upstream masks submit failures; on Android that yields silent 0-FPS streams. */
+     ret = UVC_SUCCESS;
++#endif
+   }
+ 
+   UVC_EXIT(ret);
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -121,6 +121,9 @@
+   if(APPLE)
+     target_link_libraries(${target_name} PRIVATE "-framework IOKit" "-framework CoreFoundation" "-framework Security")
+   endif()
++  if(ANDROID)
++    target_link_libraries(${target_name} PRIVATE log)
++  endif()
+   if(JPEG_FOUND)
+     target_link_libraries(${target_name}
+       PRIVATE JPEG::JPEG

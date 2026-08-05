@@ -304,6 +304,20 @@ class MainActivity : AppCompatActivity() {
             return false
         }
 
+        // Claim each USB interface id once (Android exposes every altsetting as a UsbInterface).
+        // Only claim VideoControl / VideoStreaming; leave UAC alone.
+        val claimedIds = mutableSetOf<Int>()
+        for (i in 0 until device.interfaceCount) {
+            val intf = device.getInterface(i)
+            if (intf.interfaceClass != 14) continue // USB_CLASS_VIDEO
+            if (!claimedIds.add(intf.id)) continue
+            val ok = conn.claimInterface(intf, true)
+            fileLog(
+                "claimInterface if=${intf.id} class=${intf.interfaceClass}/" +
+                    "${intf.interfaceSubclass} -> $ok"
+            )
+        }
+
         usbConnection = conn
         currentDevice = device
 
@@ -331,7 +345,8 @@ class MainActivity : AppCompatActivity() {
             it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
         if (resList.isNotEmpty()) {
-            spinnerResolution.setSelection(0, false)
+            // Do NOT default to the largest mode — USB bandwidth often cannot sustain it (0 FPS).
+            spinnerResolution.setSelection(preferredResolutionIndex(resList), false)
         }
         suppressResolutionCallback = false
         return resList
@@ -350,6 +365,18 @@ class MainActivity : AppCompatActivity() {
                     it.split("x")[0].trim().toInt()
                 }
             )
+    }
+
+    private fun preferredResolutionIndex(resList: List<String>): Int {
+        val preferred = listOf(
+            "1280x720", "960x540", "800x600", "640x480", "640x360", "320x240"
+        )
+        for (p in preferred) {
+            val idx = resList.indexOf(p)
+            if (idx >= 0) return idx
+        }
+        // List is largest-first; fall back to the smallest (safest bandwidth).
+        return resList.lastIndex.coerceAtLeast(0)
     }
 
     private fun clearResolutions() {
@@ -438,7 +465,21 @@ class MainActivity : AppCompatActivity() {
     private fun closeDevice() {
         isStreaming = false
         nativeClose()
-        usbConnection?.close()
+        val conn = usbConnection
+        val device = currentDevice
+        if (conn != null && device != null) {
+            val released = mutableSetOf<Int>()
+            for (i in 0 until device.interfaceCount) {
+                val intf = device.getInterface(i)
+                if (intf.interfaceClass != 14) continue
+                if (!released.add(intf.id)) continue
+                try {
+                    conn.releaseInterface(intf)
+                } catch (_: Exception) {
+                }
+            }
+        }
+        conn?.close()
         usbConnection = null
         currentDevice = null
     }
