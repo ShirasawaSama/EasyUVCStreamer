@@ -1,7 +1,47 @@
 <resources>
-    <string name="app_name">SimpleUVCStreamer</string>
-    <string name="preview_content_description">UVC preview</string>
-    <string name="http_section_title">HTTP MJPEG 推流</string>
+    <string name="app_name">UVC 推流</string>
+    <string name="brand_title">UVC 推流</string>
+    <string name="brand_subtitle">USB 摄像头 · MJPEG 直推</string>
+
+    <string name="preview_content_description">摄像头预览画面</string>
+    <string name="preview_placeholder">预览默认关闭，开启后在此显示</string>
+
+    <string name="section_capture">采集</string>
+    <string name="section_http">推流</string>
+
+    <string name="label_device">摄像头</string>
+    <string name="label_resolution">分辨率</string>
+    <string name="switch_stream">开始采集</string>
+    <string name="switch_preview">本机预览（费电，默认关）</string>
+
+    <string name="http_section_title">网络推流</string>
     <string name="http_port_hint">端口</string>
     <string name="http_apply_port">应用</string>
+    <string name="http_urls_title">可访问地址（可长按复制）</string>
+    <string name="http_no_urls">暂无可用地址</string>
+    <string name="http_running">推流服务运行中 · 端口 %1$d · 客户端 %2$d</string>
+    <string name="http_stopped">推流服务未运行 · 端口 %1$d</string>
+    <string name="http_access_preview">预览页</string>
+    <string name="http_access_stream">直链</string>
+    <string name="http_access_local">本机</string>
+
+    <string name="status_lib_missing">原生库加载失败</string>
+    <string name="status_init_crash">原生初始化崩溃</string>
+    <string name="status_ready">系统就绪</string>
+    <string name="status_no_device">未检测到 UVC 设备</string>
+    <string name="status_waiting_permission">等待 USB 授权…</string>
+    <string name="status_permission_denied">USB 授权被拒绝</string>
+    <string name="status_open_failed">打开设备失败</string>
+    <string name="status_no_mjpeg">该设备不支持 MJPEG</string>
+    <string name="status_resolutions_ready">已就绪 · %1$d 种分辨率</string>
+    <string name="status_device_detached">设备已拔出</string>
+    <string name="status_select_resolution">请先选择分辨率</string>
+    <string name="status_streaming">采集中 · %1$dx%2$d</string>
+    <string name="status_stream_error">采集失败 · %1$d（%2$dx%3$d）</string>
+    <string name="status_idle">已停止采集</string>
+    <string name="status_bad_port">端口无效（1–65535）</string>
+    <string name="status_http_ok">HTTP 已监听 :%1$d</string>
+    <string name="status_http_fail">HTTP 启动失败 :%1$d</string>
+    <string name="status_fps">帧率 %1$d</string>
+    <string name="status_fps_idle">帧率 —</string>
 </resources>

@@ -1,127 +1,250 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true"
-    android:padding="16dp">
+    android:background="@color/ink"
+    android:clipToPadding="false"
+    android:paddingHorizontal="16dp"
+    android:paddingTop="12dp"
+    android:paddingBottom="28dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <ImageView
-            android:id="@+id/imagePreview"
-            android:layout_width="match_parent"
-            android:layout_height="220dp"
-            android:adjustViewBounds="true"
-            android:background="#FF000000"
-            android:contentDescription="@string/preview_content_description"
-            android:scaleType="fitCenter"
-            android:layout_marginBottom="12dp" />
-
+        <!-- Header -->
         <TextView
-            android:id="@+id/tvStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Status: Disconnected"
-            android:textSize="18sp"
-            android:layout_marginBottom="16dp" />
+            android:text="@string/brand_title"
+            android:textAppearance="@style/Text.Uvc.Brand" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/http_section_title"
-            android:textStyle="bold"
-            android:textSize="16sp"
-            android:layout_marginBottom="8dp" />
+            android:layout_marginTop="2dp"
+            android:text="@string/brand_subtitle"
+            android:textAppearance="@style/Text.Uvc.Label" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:layout_marginTop="14dp"
             android:gravity="center_vertical"
-            android:layout_marginBottom="8dp">
+            android:orientation="horizontal">
 
             <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/http_port_hint"
-                android:layout_marginEnd="8dp" />
-
-            <EditText
-                android:id="@+id/editHttpPort"
+                android:id="@+id/tvStatus"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:inputType="number"
-                android:maxLength="5"
-                android:hint="@string/http_port_hint"
-                android:importantForAutofill="no"
-                android:imeOptions="actionDone" />
+                android:background="@drawable/bg_status_chip"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="8dp"
+                android:text="@string/status_ready"
+                android:textColor="@color/signal"
+                android:textSize="13sp" />
 
-            <Button
-                android:id="@+id/btnApplyHttpPort"
+            <TextView
+                android:id="@+id/tvFps"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
-                android:text="@string/http_apply_port" />
+                android:background="@drawable/bg_url_block"
+                android:fontFamily="monospace"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="8dp"
+                android:text="@string/status_fps_idle"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:visibility="gone" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/tvHttpState"
+        <!-- Preview -->
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Uvc.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="14sp"
-            android:layout_marginBottom="4dp" />
+            android:layout_marginTop="16dp">
 
-        <TextView
-            android:id="@+id/tvHttpUrls"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textIsSelectable="true"
-            android:textSize="13sp"
-            android:fontFamily="monospace"
-            android:lineSpacingExtra="2dp"
-            android:layout_marginBottom="16dp" />
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="220dp">
 
-        <com.google.android.material.materialswitch.MaterialSwitch
-            android:id="@+id/switchStream"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="UVC Stream On/Off"
-            android:layout_marginBottom="8dp" />
+                <ImageView
+                    android:id="@+id/imagePreview"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:adjustViewBounds="true"
+                    android:background="@drawable/bg_preview"
+                    android:contentDescription="@string/preview_content_description"
+                    android:scaleType="fitCenter" />
 
-        <com.google.android.material.materialswitch.MaterialSwitch
-            android:id="@+id/switchPreview"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:checked="false"
-            android:text="实时预览（默认关，仅调试用）"
-            android:layout_marginBottom="16dp" />
+                <TextView
+                    android:id="@+id/tvPreviewHint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:gravity="center"
+                    android:paddingHorizontal="24dp"
+                    android:text="@string/preview_placeholder"
+                    android:textColor="@color/text_muted"
+                    android:textSize="13sp" />
+            </FrameLayout>
+        </com.google.android.material.card.MaterialCardView>
 
-        <TextView
+        <!-- Capture -->
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Uvc.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Select Device:" />
+            android:layout_marginTop="14dp">
 
-        <Spinner
-            android:id="@+id/spinnerDevice"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Select Resolution:" />
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/section_capture"
+                    android:textAppearance="@style/Text.Uvc.Section" />
 
-        <Spinner
-            android:id="@+id/spinnerResolution"
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="@string/label_device"
+                    android:textAppearance="@style/Text.Uvc.Label" />
+
+                <Spinner
+                    android:id="@+id/spinnerDevice"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_url_block"
+                    android:paddingHorizontal="4dp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/label_resolution"
+                    android:textAppearance="@style/Text.Uvc.Label" />
+
+                <Spinner
+                    android:id="@+id/spinnerResolution"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_url_block"
+                    android:paddingHorizontal="4dp" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchStream"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/switch_stream"
+                    android:textAppearance="@style/Text.Uvc.Body" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchPreview"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:checked="false"
+                    android:text="@string/switch_preview"
+                    android:textAppearance="@style/Text.Uvc.Body" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- HTTP -->
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Uvc.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp" />
+            android:layout_marginTop="14dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/section_http"
+                    android:textAppearance="@style/Text.Uvc.Section" />
+
+                <TextView
+                    android:id="@+id/tvHttpState"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:textAppearance="@style/Text.Uvc.Label" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:hint="@string/http_port_hint">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/editHttpPort"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:imeOptions="actionDone"
+                            android:importantForAutofill="no"
+                            android:inputType="number"
+                            android:maxLength="5"
+                            android:textColor="@color/text_primary" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnApplyHttpPort"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:minWidth="0dp"
+                        android:text="@string/http_apply_port" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/http_urls_title"
+                    android:textAppearance="@style/Text.Uvc.Label" />
+
+                <TextView
+                    android:id="@+id/tvHttpUrls"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/bg_url_block"
+                    android:padding="12dp"
+                    android:textAppearance="@style/Text.Uvc.Mono"
+                    android:textIsSelectable="true" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
     </LinearLayout>
-</ScrollView>
+</androidx.core.widget.NestedScrollView>

@@ -68,8 +68,10 @@ class HttpStreamController(context: Context) {
         val lines = mutableListOf<String>()
         for (ep in NetworkAddresses.ipv4Endpoints()) {
             val label = if (ep.isLoopback) "本机" else ep.interfaceName
-            lines += "$label  预览页  http://${ep.host}:$p/"
-            lines += "$label  直链    http://${ep.host}:$p$STREAM_PATH"
+            lines += "[$label] 预览页"
+            lines += "  http://${ep.host}:$p/"
+            lines += "[$label] 直链"
+            lines += "  http://${ep.host}:$p$STREAM_PATH"
         }
         return lines
     }

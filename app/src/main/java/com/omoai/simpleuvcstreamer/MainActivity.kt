@@ -10,14 +10,14 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
-import android.widget.Button
-import android.widget.EditText
 import android.widget.ImageView
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.materialswitch.MaterialSwitch
+import com.google.android.material.textfield.TextInputEditText
 import com.omoai.simpleuvcstreamer.preview.FramePreviewController
 import com.omoai.simpleuvcstreamer.stream.HttpStreamController
 import com.omoai.simpleuvcstreamer.ui.SafeArea
@@ -39,13 +39,15 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     }
 
     private lateinit var tvStatus: TextView
+    private lateinit var tvFps: TextView
+    private lateinit var tvPreviewHint: TextView
     private lateinit var switchStream: MaterialSwitch
     private lateinit var switchPreview: MaterialSwitch
     private lateinit var spinnerDevice: Spinner
     private lateinit var spinnerResolution: Spinner
     private lateinit var imagePreview: ImageView
-    private lateinit var editHttpPort: EditText
-    private lateinit var btnApplyHttpPort: Button
+    private lateinit var editHttpPort: TextInputEditText
+    private lateinit var btnApplyHttpPort: MaterialButton
     private lateinit var tvHttpState: TextView
     private lateinit var tvHttpUrls: TextView
 
@@ -65,6 +67,8 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         override fun run() {
             if (session.isStreaming && UvcNative.isLibLoaded) {
                 updateFpsText(session.frameCountPerSecond())
+            } else {
+                tvFps.visibility = View.GONE
             }
             refreshHttpUi()
             fpsHandler.postDelayed(this, 1000)
@@ -79,6 +83,8 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         FileLogger.log("--- App Started ---")
 
         tvStatus = findViewById(R.id.tvStatus)
+        tvFps = findViewById(R.id.tvFps)
+        tvPreviewHint = findViewById(R.id.tvPreviewHint)
         switchStream = findViewById(R.id.switchStream)
         switchPreview = findViewById(R.id.switchPreview)
         spinnerDevice = findViewById(R.id.spinnerDevice)
@@ -95,7 +101,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         httpStream = HttpStreamController(this)
 
         if (!UvcNative.isLibLoaded) {
-            updateStatus("ERR: LIB NOT LOADED")
+            updateStatus(getString(R.string.status_lib_missing))
             FileLogger.log("FATAL: Library not loaded")
             refreshHttpUi()
             return
@@ -104,15 +110,14 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         try {
             val res = UvcNative.nativeInit()
             FileLogger.log("nativeInit result: $res")
-            updateStatus("System Ready (Init: $res)")
+            updateStatus(getString(R.string.status_ready))
         } catch (t: Throwable) {
             FileLogger.log("nativeInit CRASHED: ${t.message}")
-            updateStatus("Native Init Crash")
+            updateStatus(getString(R.string.status_init_crash))
             refreshHttpUi()
             return
         }
 
-        // HTTP server auto-starts by default (port persisted / 8080).
         editHttpPort.setText(httpStream.port.toString())
         val httpOk = httpStream.ensureStarted()
         FileLogger.log("HTTP auto-start ok=$httpOk port=${httpStream.port}")
@@ -127,11 +132,12 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
         refreshHttpUi()
 
-        // Preview stays off unless user enables it — no decode on main path.
         switchPreview.isChecked = false
+        tvPreviewHint.visibility = View.VISIBLE
         switchPreview.setOnCheckedChangeListener { _, checked ->
             FileLogger.log("Preview switch: $checked")
             previewController.setEnabled(checked)
+            tvPreviewHint.visibility = if (checked) View.GONE else View.VISIBLE
         }
 
         switchStream.setOnCheckedChangeListener { _, isChecked ->
@@ -151,14 +157,17 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         val raw = editHttpPort.text?.toString()?.trim().orEmpty()
         val p = raw.toIntOrNull()
         if (p == null || p !in 1..65535) {
-            updateStatus("Invalid HTTP port")
+            updateStatus(getString(R.string.status_bad_port))
             editHttpPort.setText(httpStream.port.toString())
             refreshHttpUi()
             return
         }
         val ok = httpStream.applyPort(p)
         editHttpPort.setText(httpStream.port.toString())
-        updateStatus(if (ok) "HTTP on :$p" else "HTTP start failed :$p")
+        updateStatus(
+            if (ok) getString(R.string.status_http_ok, p)
+            else getString(R.string.status_http_fail, p)
+        )
         refreshHttpUi()
     }
 
@@ -169,13 +178,13 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             val port = if (running) UvcNative.nativeGetHttpServerPort() else httpStream.port
             val clients = httpStream.clientCount
             tvHttpState.text = if (running) {
-                "HTTP: 运行中 · 端口 $port · 客户端 $clients"
+                getString(R.string.http_running, port, clients)
             } else {
-                "HTTP: 未运行 · 端口 $port"
+                getString(R.string.http_stopped, port)
             }
             val urls = httpStream.accessLines()
             tvHttpUrls.text = if (urls.isEmpty()) {
-                "暂无可用地址"
+                getString(R.string.http_no_urls)
             } else {
                 urls.joinToString("\n")
             }
@@ -188,7 +197,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         if (UvcDeviceFinder.sameDevice(device, session.currentDevice)) {
             session.close()
             clearResolutions()
-            updateStatus("Device detached")
+            updateStatus(getString(R.string.status_device_detached))
         }
         refreshDeviceList()
     }
@@ -201,7 +210,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         } else {
             pendingStartAfterPermission = false
             setSwitchChecked(false)
-            updateStatus("USB permission denied")
+            updateStatus(getString(R.string.status_permission_denied))
         }
     }
 
@@ -227,6 +236,12 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
     }
 
+    private fun stringAdapter(items: List<String>): ArrayAdapter<String> {
+        return ArrayAdapter(this, R.layout.item_spinner, items).also {
+            it.setDropDownViewResource(R.layout.item_spinner_dropdown)
+        }
+    }
+
     private fun refreshDeviceList() {
         uvcDevices = UvcDeviceFinder.listUvcDevices(usbManager)
         FileLogger.log("UVC Device count: ${uvcDevices.size}")
@@ -236,9 +251,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         val keepIndex = uvcDevices.indexOfFirst { it.deviceName == previousName }.coerceAtLeast(0)
 
         suppressDeviceCallback = true
-        spinnerDevice.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels).also {
-            it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        }
+        spinnerDevice.adapter = stringAdapter(labels)
         if (labels.isNotEmpty()) {
             spinnerDevice.setSelection(keepIndex, false)
         }
@@ -247,7 +260,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         if (uvcDevices.isEmpty()) {
             session.close()
             clearResolutions()
-            updateStatus("No UVC device")
+            updateStatus(getString(R.string.status_no_device))
             return
         }
 
@@ -268,7 +281,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             pendingStartAfterPermission = startStream
             FileLogger.log("Requesting USB permission for ${device.productName}")
             usbMonitor.requestPermission(usbManager, device)
-            updateStatus("Waiting USB permission...")
+            updateStatus(getString(R.string.status_waiting_permission))
             return
         }
 
@@ -278,18 +291,18 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private fun openDeviceAndLoadResolutions(device: UsbDevice, startStream: Boolean) {
         if (!session.open(device)) {
             setSwitchChecked(false)
-            updateStatus("Open device failed")
+            updateStatus(getString(R.string.status_open_failed))
             return
         }
 
         val resList = loadResolutionsIntoSpinner(session.loadResolutions())
         if (resList.isEmpty()) {
-            updateStatus("ERR: MJPEG Not Supported")
+            updateStatus(getString(R.string.status_no_mjpeg))
             setSwitchChecked(false)
             return
         }
 
-        updateStatus("Ready: ${resList.size} resolutions")
+        updateStatus(getString(R.string.status_resolutions_ready, resList.size))
         if (startStream) {
             applySelectedResolution()
         }
@@ -297,13 +310,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
     private fun loadResolutionsIntoSpinner(resList: List<String>): List<String> {
         suppressResolutionCallback = true
-        spinnerResolution.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            resList
-        ).also {
-            it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        }
+        spinnerResolution.adapter = stringAdapter(resList)
         if (resList.isNotEmpty()) {
             spinnerResolution.setSelection(Resolution.preferredIndex(resList), false)
         }
@@ -313,11 +320,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
     private fun clearResolutions() {
         suppressResolutionCallback = true
-        spinnerResolution.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            emptyList<String>()
-        )
+        spinnerResolution.adapter = stringAdapter(emptyList())
         suppressResolutionCallback = false
     }
 
@@ -325,7 +328,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         if (uvcDevices.isEmpty()) {
             FileLogger.log("startStreaming: No UVC devices")
             setSwitchChecked(false)
-            updateStatus("No UVC device")
+            updateStatus(getString(R.string.status_no_device))
             return
         }
         val device = uvcDevices.getOrNull(spinnerDevice.selectedItemPosition) ?: run {
@@ -341,7 +344,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         if (size == null) {
             FileLogger.log("applySelectedResolution: no resolution selected")
             setSwitchChecked(false)
-            updateStatus("Select a resolution first")
+            updateStatus(getString(R.string.status_select_resolution))
             return
         }
         if (!session.isDeviceOpen) {
@@ -353,16 +356,17 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         val startRes = session.startStream(width, height, 30)
         if (startRes == 0) {
             setSwitchChecked(true)
-            updateStatus("Streaming: ${width}x${height}")
+            updateStatus(getString(R.string.status_streaming, width, height))
         } else {
             setSwitchChecked(false)
-            updateStatus("Stream Error: $startRes (${width}x${height})")
+            updateStatus(getString(R.string.status_stream_error, startRes, width, height))
         }
     }
 
     private fun stopStreaming() {
         session.stopStream()
-        updateStatus("Ready")
+        tvFps.visibility = View.GONE
+        updateStatus(getString(R.string.status_idle))
     }
 
     private fun setSwitchChecked(checked: Boolean) {
@@ -376,13 +380,13 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     }
 
     private fun updateStatus(status: String) {
-        runOnUiThread { tvStatus.text = "Status: $status" }
+        runOnUiThread { tvStatus.text = status }
     }
 
     private fun updateFpsText(fps: Int) {
         runOnUiThread {
-            val cur = tvStatus.text.toString().substringBefore(" | FPS:")
-            tvStatus.text = "$cur | FPS: $fps"
+            tvFps.visibility = View.VISIBLE
+            tvFps.text = getString(R.string.status_fps, fps)
         }
     }
 
