@@ -1,0 +1,3 @@
+- [x] Update MainActivity.kt (Filter UVC, Fix Start logic, Cleanup)
+- [x] Update simpleuvcstreamer.cpp (Broaden format support, Add fallback)
+- [x] Verify build and functionality

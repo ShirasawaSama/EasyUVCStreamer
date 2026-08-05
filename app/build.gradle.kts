@@ -4,9 +4,7 @@ plugins {
 
 android {
     namespace = "com.omoai.simpleuvcstreamer"
-    compileSdk {
-        version = release(37)
-    }
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.omoai.simpleuvcstreamer"
@@ -23,7 +21,6 @@ android {
 
         externalNativeBuild {
             cmake {
-                cppFlags += ""
                 val vcpkgRoot = System.getenv("VCPKG_ROOT") ?: "${System.getProperty("user.home")}/vcpkg"
                 val ndkDir = "/Users/shirasawa/Library/Android/sdk/ndk/28.2.13676358"
 
