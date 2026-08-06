@@ -47,14 +47,14 @@ class UvcSession(private val usbManager: UsbManager) {
         return true
     }
 
-    fun loadResolutions(): List<String> {
-        val resStr = UvcNative.nativeGetResolutions()
-        FileLogger.log("Available resolutions: $resStr")
-        return Resolution.parse(resStr)
+    fun loadStreamModes(): List<StreamMode> {
+        val raw = UvcNative.nativeGetResolutions()
+        FileLogger.log("Available modes: $raw")
+        return StreamMode.parse(raw)
     }
 
-    fun startStream(width: Int, height: Int, fps: Int = 30): Int {
-        FileLogger.log("Starting/switching stream to ${width}x${height}")
+    fun startStream(width: Int, height: Int, fps: Int): Int {
+        FileLogger.log("Starting/switching stream to ${width}x${height} @${fps}fps")
         val startRes = UvcNative.nativeStartStream(width, height, fps)
         FileLogger.log("nativeStartStream result: $startRes")
         isStreaming = startRes == 0

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdlib>
+#include <set>
 #include <vector>
 
 namespace {
@@ -30,7 +31,7 @@ struct StreamCandidate {
 
 int interval_to_fps(uint32_t interval_100ns) {
     if (interval_100ns == 0) return 0;
-    return static_cast<int>(10000000 / interval_100ns);
+    return static_cast<int>((10000000 + interval_100ns / 2) / interval_100ns);
 }
 
 uint8_t format_interface_number(const uvc_format_desc_t *format_desc) {
@@ -67,28 +68,32 @@ bool interface_is_bulk(libusb_device_handle *usb_devh, uint8_t ifnum) {
     return found && bulk;
 }
 
-uint32_t pick_interval(const uvc_frame_desc_t *frame_desc, int prefer_fps) {
+std::vector<uint32_t> collect_intervals(const uvc_frame_desc_t *frame_desc) {
+    std::vector<uint32_t> out;
     if (frame_desc->intervals) {
-        uint32_t best = 0;
-        int best_delta = INT_MAX;
         for (uint32_t *interval = frame_desc->intervals; *interval; ++interval) {
-            int fps = interval_to_fps(*interval);
-            if (fps <= 0) continue;
-            int delta = std::abs(fps - prefer_fps);
-            if (delta < best_delta) {
-                best_delta = delta;
-                best = *interval;
-            }
+            out.push_back(*interval);
         }
-        if (best != 0) return best;
     }
-    if (frame_desc->dwDefaultFrameInterval != 0) {
-        return frame_desc->dwDefaultFrameInterval;
+    if (out.empty() && frame_desc->dwDefaultFrameInterval != 0) {
+        out.push_back(frame_desc->dwDefaultFrameInterval);
     }
-    if (frame_desc->dwMinFrameInterval != 0) {
-        return frame_desc->dwMinFrameInterval;
+    if (out.empty() && frame_desc->dwMinFrameInterval != 0) {
+        out.push_back(frame_desc->dwMinFrameInterval);
     }
-    return 333333;
+    if (out.empty() && frame_desc->dwMaxFrameInterval != 0) {
+        out.push_back(frame_desc->dwMaxFrameInterval);
+    }
+    if (out.empty()) {
+        out.push_back(333333);  // ~30fps
+    }
+    // Unique keep order
+    std::vector<uint32_t> unique;
+    std::set<uint32_t> seen;
+    for (uint32_t v : out) {
+        if (seen.insert(v).second) unique.push_back(v);
+    }
+    return unique;
 }
 
 std::vector<StreamCandidate> collect_mjpeg_candidates(
@@ -108,18 +113,19 @@ std::vector<StreamCandidate> collect_mjpeg_candidates(
             const uvc_frame_desc_t *frame_desc = format_desc->frame_descs;
             while (frame_desc) {
                 if (frame_desc->wWidth == width && frame_desc->wHeight == height) {
-                    uint32_t interval = pick_interval(frame_desc, prefer_fps);
-                    StreamCandidate c{};
-                    c.ifnum = ifnum;
-                    c.format_index = format_desc->bFormatIndex;
-                    c.frame_index = frame_desc->bFrameIndex;
-                    c.interval = interval;
-                    c.fps = interval_to_fps(interval);
-                    c.bulk = bulk;
-                    out.push_back(c);
-                    LOGI("candidate: if=%u fmt=%u frame=%u %dx%d @%dfps (%s)",
-                         c.ifnum, c.format_index, c.frame_index,
-                         width, height, c.fps, c.bulk ? "BULK" : "ISOCH");
+                    for (uint32_t interval : collect_intervals(frame_desc)) {
+                        StreamCandidate c{};
+                        c.ifnum = ifnum;
+                        c.format_index = format_desc->bFormatIndex;
+                        c.frame_index = frame_desc->bFrameIndex;
+                        c.interval = interval;
+                        c.fps = interval_to_fps(interval);
+                        c.bulk = bulk;
+                        out.push_back(c);
+                        LOGI("candidate: if=%u fmt=%u frame=%u %dx%d @%dfps (%s)",
+                             c.ifnum, c.format_index, c.frame_index,
+                             width, height, c.fps, c.bulk ? "BULK" : "ISOCH");
+                    }
                 }
                 frame_desc = frame_desc->next;
             }
@@ -127,9 +133,15 @@ std::vector<StreamCandidate> collect_mjpeg_candidates(
         format_desc = format_desc->next;
     }
 
+    // Prefer BULK; among same transport prefer closer fps; on tie prefer lower fps
+    // (often more likely to pass bandwidth probe).
     std::sort(out.begin(), out.end(), [prefer_fps](const StreamCandidate &a, const StreamCandidate &b) {
         if (a.bulk != b.bulk) return a.bulk && !b.bulk;
-        return std::abs(a.fps - prefer_fps) < std::abs(b.fps - prefer_fps);
+        int da = std::abs(a.fps - prefer_fps);
+        int db = std::abs(b.fps - prefer_fps);
+        if (da != db) return da < db;
+        if (a.fps != b.fps) return a.fps < b.fps;
+        return a.interval < b.interval;
     });
     return out;
 }
@@ -159,7 +171,8 @@ uvc_error_t probe_candidate(uvc_device_handle_t *devh, const StreamCandidate &c,
              ctrl->dwFrameInterval, ctrl->dwMaxVideoFrameSize, ctrl->dwMaxPayloadTransferSize,
              c.bulk ? "BULK" : "ISOCH");
     } else {
-        LOGI("probe failed if=%u fmt=%u frame=%u: %d", c.ifnum, c.format_index, c.frame_index, res);
+        LOGI("probe failed if=%u fmt=%u frame=%u @%dfps: %d",
+             c.ifnum, c.format_index, c.frame_index, c.fps, res);
     }
     return res;
 }
@@ -187,6 +200,6 @@ uvc_error_t get_mjpeg_stream_ctrl(
         return res;
     }
 
-    LOGE("get_mjpeg_stream_ctrl: no mode for %dx%d", width, height);
+    LOGE("get_mjpeg_stream_ctrl: no mode for %dx%d @~%dfps", width, height, prefer_fps);
     return res < 0 ? res : UVC_ERROR_INVALID_MODE;
 }

@@ -11,9 +11,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <set>
 #include <sstream>
 #include <thread>
+#include <vector>
+#include <algorithm>
 
 namespace uvc_engine {
 namespace {
@@ -177,34 +180,103 @@ int get_frame_count() {
 }
 
 std::string get_resolutions() {
+    // Wire: WxH|fps1,fps2|defaultFps|isDeviceDefault;
     if (!g_devh) return "";
 
-    struct Res {
-        int w;
-        int h;
-        bool operator<(const Res &o) const {
-            if (w * h != o.w * o.h) return w * h > o.w * o.h;
-            if (w != o.w) return w > o.w;
-            return h > o.h;
-        }
+    auto interval_to_fps = [](uint32_t interval_100ns) -> int {
+        if (interval_100ns == 0) return 0;
+        return static_cast<int>((10000000 + interval_100ns / 2) / interval_100ns);
     };
 
-    std::set<Res> unique;
+    struct ModeAgg {
+        std::set<int> fps;
+        int default_fps = 0;
+        bool device_default = false;
+    };
+
+    std::map<std::pair<int, int>, ModeAgg> modes;
+
     const uvc_format_desc_t *format_desc = uvc_get_format_descs(g_devh);
     while (format_desc) {
         if (format_desc->bDescriptorSubtype == UVC_VS_FORMAT_MJPEG) {
             const uvc_frame_desc_t *frame_desc = format_desc->frame_descs;
             while (frame_desc) {
-                unique.insert({frame_desc->wWidth, frame_desc->wHeight});
+                auto key = std::make_pair(
+                        static_cast<int>(frame_desc->wWidth),
+                        static_cast<int>(frame_desc->wHeight));
+                ModeAgg &agg = modes[key];
+
+                if (frame_desc->intervals) {
+                    for (uint32_t *interval = frame_desc->intervals; *interval; ++interval) {
+                        int fps = interval_to_fps(*interval);
+                        if (fps > 0) agg.fps.insert(fps);
+                    }
+                }
+                if (frame_desc->dwDefaultFrameInterval != 0) {
+                    int fps = interval_to_fps(frame_desc->dwDefaultFrameInterval);
+                    if (fps > 0) {
+                        agg.fps.insert(fps);
+                        if (agg.default_fps == 0) agg.default_fps = fps;
+                    }
+                }
+                if (frame_desc->dwMinFrameInterval != 0) {
+                    int fps = interval_to_fps(frame_desc->dwMinFrameInterval);
+                    if (fps > 0) agg.fps.insert(fps);
+                }
+                if (frame_desc->dwMaxFrameInterval != 0) {
+                    int fps = interval_to_fps(frame_desc->dwMaxFrameInterval);
+                    if (fps > 0) agg.fps.insert(fps);
+                }
+
+                const bool is_default_frame =
+                        frame_desc->bFrameIndex == format_desc->bDefaultFrameIndex;
+                if (is_default_frame) {
+                    agg.device_default = true;
+                    int def = interval_to_fps(frame_desc->dwDefaultFrameInterval);
+                    if (def > 0) agg.default_fps = def;
+                }
+
                 frame_desc = frame_desc->next;
             }
         }
         format_desc = format_desc->next;
     }
 
+    std::vector<std::pair<std::pair<int, int>, ModeAgg>> ordered(modes.begin(), modes.end());
+    std::sort(ordered.begin(), ordered.end(), [](const auto &a, const auto &b) {
+        const int pa = a.first.first * a.first.second;
+        const int pb = b.first.first * b.first.second;
+        if (pa != pb) return pa > pb;
+        return a.first.first > b.first.first;
+    });
+
     std::stringstream ss;
-    for (const auto &r : unique) {
-        ss << r.w << "x" << r.h << ";";
+    for (const auto &entry : ordered) {
+        const int w = entry.first.first;
+        const int h = entry.first.second;
+        ModeAgg agg = entry.second;
+        if (agg.fps.empty()) {
+            agg.fps.insert(30);
+        }
+        if (agg.default_fps == 0 || agg.fps.count(agg.default_fps) == 0) {
+            // Prefer ~30 if present, else highest
+            if (agg.fps.count(30)) {
+                agg.default_fps = 30;
+            } else {
+                agg.default_fps = *agg.fps.rbegin();
+            }
+        }
+
+        ss << w << "x" << h << "|";
+        bool first = true;
+        for (auto it = agg.fps.rbegin(); it != agg.fps.rend(); ++it) {
+            if (!first) ss << ",";
+            ss << *it;
+            first = false;
+        }
+        ss << "|" << agg.default_fps << "|" << (agg.device_default ? 1 : 0) << ";";
+        LOGI("mode %dx%d fps={default=%d deviceDefault=%d}",
+             w, h, agg.default_fps, agg.device_default ? 1 : 0);
     }
     return ss.str();
 }

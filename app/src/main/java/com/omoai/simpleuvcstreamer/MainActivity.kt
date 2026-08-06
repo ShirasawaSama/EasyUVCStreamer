@@ -36,7 +36,7 @@ import com.omoai.simpleuvcstreamer.usb.UsbDeviceMonitor
 import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
 import com.omoai.simpleuvcstreamer.util.AppPermissions
 import com.omoai.simpleuvcstreamer.util.FileLogger
-import com.omoai.simpleuvcstreamer.uvc.Resolution
+import com.omoai.simpleuvcstreamer.uvc.StreamMode
 import com.omoai.simpleuvcstreamer.uvc.UvcNative
 import com.omoai.simpleuvcstreamer.uvc.UvcSession
 
@@ -58,6 +58,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private lateinit var previewContainer: MaterialCardView
     private lateinit var dropdownDevice: AutoCompleteTextView
     private lateinit var dropdownResolution: AutoCompleteTextView
+    private lateinit var dropdownFps: AutoCompleteTextView
     private lateinit var imagePreview: ImageView
     private lateinit var editHttpPort: TextInputEditText
     private lateinit var btnApplyHttpPort: MaterialButton
@@ -72,9 +73,10 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private lateinit var httpStream: HttpStreamController
 
     private var uvcDevices: List<UsbDevice> = emptyList()
-    private var resolutionLabels: List<String> = emptyList()
+    private var streamModes: List<StreamMode> = emptyList()
     private var suppressDeviceCallback = false
     private var suppressResolutionCallback = false
+    private var suppressFpsCallback = false
     private var pendingStartAfterPermission = false
     private var lastAccessSignature: String = ""
 
@@ -118,6 +120,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         previewContainer = findViewById(R.id.previewContainer)
         dropdownDevice = findViewById(R.id.dropdownDevice)
         dropdownResolution = findViewById(R.id.dropdownResolution)
+        dropdownFps = findViewById(R.id.dropdownFps)
         imagePreview = findViewById(R.id.imagePreview)
         editHttpPort = findViewById(R.id.editHttpPort)
         btnApplyHttpPort = findViewById(R.id.btnApplyHttpPort)
@@ -368,7 +371,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     override fun onDeviceDetached(device: UsbDevice) {
         if (UvcDeviceFinder.sameDevice(device, session.currentDevice)) {
             session.close()
-            clearResolutions()
+            clearModes()
             updateStatus(getString(R.string.status_device_detached))
         }
         refreshDeviceList()
@@ -378,7 +381,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         if (granted && device != null) {
             val shouldStart = pendingStartAfterPermission || switchStream.isChecked
             pendingStartAfterPermission = false
-            openDeviceAndLoadResolutions(device, startStream = shouldStart)
+            openDeviceAndLoadModes(device, startStream = shouldStart)
         } else {
             pendingStartAfterPermission = false
             setSwitchChecked(false)
@@ -394,8 +397,17 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
         dropdownResolution.setOnItemClickListener { _, _, pos, _ ->
             if (suppressResolutionCallback) return@setOnItemClickListener
-            if (!session.isStreaming) return@setOnItemClickListener
-            applySelectedResolution(pos)
+            val mode = streamModes.getOrNull(pos) ?: return@setOnItemClickListener
+            bindFpsDropdown(mode, preferFps = mode.defaultFps)
+            if (session.isStreaming) {
+                applySelectedMode()
+            }
+        }
+        dropdownFps.setOnItemClickListener { _, _, _, _ ->
+            if (suppressFpsCallback) return@setOnItemClickListener
+            if (session.isStreaming) {
+                applySelectedMode()
+            }
         }
     }
 
@@ -418,7 +430,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
         if (uvcDevices.isEmpty()) {
             session.close()
-            clearResolutions()
+            clearModes()
             updateStatus(getString(R.string.status_no_device))
             return
         }
@@ -430,7 +442,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private fun prepareDevice(device: UsbDevice, startStream: Boolean) {
         if (UvcDeviceFinder.sameDevice(device, session.currentDevice) && session.isDeviceOpen) {
             when {
-                startStream && !session.isStreaming -> applySelectedResolution()
+                startStream && !session.isStreaming -> applySelectedMode()
                 !startStream && session.isStreaming -> stopStreaming()
             }
             return
@@ -444,49 +456,70 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             return
         }
 
-        openDeviceAndLoadResolutions(device, startStream)
+        openDeviceAndLoadModes(device, startStream)
     }
 
-    private fun openDeviceAndLoadResolutions(device: UsbDevice, startStream: Boolean) {
+    private fun openDeviceAndLoadModes(device: UsbDevice, startStream: Boolean) {
         if (!session.open(device)) {
             setSwitchChecked(false)
             updateStatus(getString(R.string.status_open_failed))
             return
         }
 
-        val resList = loadResolutionsIntoDropdown(session.loadResolutions())
-        if (resList.isEmpty()) {
+        val modes = loadModesIntoDropdown(session.loadStreamModes())
+        if (modes.isEmpty()) {
             updateStatus(getString(R.string.status_no_mjpeg))
             setSwitchChecked(false)
             return
         }
 
-        updateStatus(getString(R.string.status_resolutions_ready, resList.size))
+        updateStatus(getString(R.string.status_resolutions_ready, modes.size))
         if (startStream) {
-            applySelectedResolution()
+            applySelectedMode()
         }
     }
 
-    private fun loadResolutionsIntoDropdown(resList: List<String>): List<String> {
-        resolutionLabels = resList
+    private fun loadModesIntoDropdown(modes: List<StreamMode>): List<StreamMode> {
+        streamModes = modes
+        val labels = modes.map { it.sizeLabel }
         suppressResolutionCallback = true
-        dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, resList))
-        if (resList.isNotEmpty()) {
-            val idx = Resolution.preferredIndex(resList)
-            dropdownResolution.setText(resList[idx], false)
+        dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
+        if (modes.isNotEmpty()) {
+            val idx = StreamMode.preferredIndex(modes)
+            val mode = modes[idx]
+            dropdownResolution.setText(mode.sizeLabel, false)
+            bindFpsDropdown(mode, preferFps = mode.defaultFps)
         } else {
             dropdownResolution.setText("", false)
+            clearFpsDropdown()
         }
         suppressResolutionCallback = false
-        return resList
+        return modes
     }
 
-    private fun clearResolutions() {
-        resolutionLabels = emptyList()
+    private fun bindFpsDropdown(mode: StreamMode, preferFps: Int) {
+        val labels = mode.fpsLabels()
+        val selectedFps = mode.nearestFps(preferFps)
+        suppressFpsCallback = true
+        dropdownFps.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
+        dropdownFps.setText("$selectedFps fps", false)
+        suppressFpsCallback = false
+    }
+
+    private fun clearFpsDropdown() {
+        suppressFpsCallback = true
+        dropdownFps.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, emptyList<String>()))
+        dropdownFps.setText("", false)
+        suppressFpsCallback = false
+    }
+
+    private fun clearModes() {
+        streamModes = emptyList()
         suppressResolutionCallback = true
         dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, emptyList<String>()))
         dropdownResolution.setText("", false)
         suppressResolutionCallback = false
+        clearFpsDropdown()
     }
 
     private fun startStreaming() {
@@ -505,17 +538,30 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         prepareDevice(device, startStream = true)
     }
 
-    private fun applySelectedResolution(forcedIndex: Int? = null) {
-        val resLabel = if (forcedIndex != null) {
-            resolutionLabels.getOrNull(forcedIndex)
-        } else {
-            dropdownResolution.text?.toString()
-        }
-        val size = resLabel?.let { Resolution.parseSize(it) }
-        if (size == null) {
-            FileLogger.log("applySelectedResolution: no resolution selected")
+    private fun selectedMode(): StreamMode? {
+        val label = dropdownResolution.text?.toString()?.trim().orEmpty()
+        return streamModes.firstOrNull { it.sizeLabel == label }
+    }
+
+    private fun selectedFps(mode: StreamMode): Int? {
+        val fromUi = StreamMode.parseFpsLabel(dropdownFps.text?.toString().orEmpty())
+        if (fromUi != null && mode.fpsList.contains(fromUi)) return fromUi
+        return mode.defaultFps.takeIf { mode.fpsList.contains(it) } ?: mode.fpsList.firstOrNull()
+    }
+
+    private fun applySelectedMode() {
+        val mode = selectedMode()
+        if (mode == null) {
+            FileLogger.log("applySelectedMode: no resolution selected")
             setSwitchChecked(false)
             updateStatus(getString(R.string.status_select_resolution))
+            return
+        }
+        val fps = selectedFps(mode)
+        if (fps == null) {
+            FileLogger.log("applySelectedMode: no fps selected")
+            setSwitchChecked(false)
+            updateStatus(getString(R.string.status_select_fps))
             return
         }
         if (!session.isDeviceOpen) {
@@ -523,14 +569,15 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             return
         }
 
-        val (width, height) = size
-        val startRes = session.startStream(width, height, 30)
+        val startRes = session.startStream(mode.width, mode.height, fps)
         if (startRes == 0) {
             setSwitchChecked(true)
-            updateStatus(getString(R.string.status_streaming, width, height))
+            updateStatus(getString(R.string.status_streaming, mode.width, mode.height, fps))
         } else {
             setSwitchChecked(false)
-            updateStatus(getString(R.string.status_stream_error, startRes, width, height))
+            updateStatus(
+                getString(R.string.status_stream_error, startRes, mode.width, mode.height, fps)
+            )
         }
     }
 
