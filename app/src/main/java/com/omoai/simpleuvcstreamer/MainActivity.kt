@@ -36,6 +36,7 @@ import com.omoai.simpleuvcstreamer.usb.UsbDeviceMonitor
 import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
 import com.omoai.simpleuvcstreamer.util.AppPermissions
 import com.omoai.simpleuvcstreamer.util.FileLogger
+import com.omoai.simpleuvcstreamer.uvc.CameraModePrefs
 import com.omoai.simpleuvcstreamer.uvc.StreamMode
 import com.omoai.simpleuvcstreamer.uvc.UvcNative
 import com.omoai.simpleuvcstreamer.uvc.UvcSession
@@ -485,10 +486,27 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         suppressResolutionCallback = true
         dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
         if (modes.isNotEmpty()) {
-            val idx = StreamMode.preferredIndex(modes)
+            val remembered = session.currentDevice?.let { CameraModePrefs.load(this, it) }
+            val rememberedIdx = remembered?.let {
+                StreamMode.indexOfSize(modes, it.width, it.height)
+            }?.takeIf { it >= 0 }
+            val idx = rememberedIdx ?: StreamMode.preferredIndex(modes)
             val mode = modes[idx]
+            val preferFps = when {
+                remembered != null &&
+                    remembered.width == mode.width &&
+                    remembered.height == mode.height &&
+                    mode.fpsList.contains(remembered.fps) -> remembered.fps
+                else -> mode.defaultFps
+            }
             dropdownResolution.setText(mode.sizeLabel, false)
-            bindFpsDropdown(mode, preferFps = mode.defaultFps)
+            bindFpsDropdown(mode, preferFps = preferFps)
+            if (remembered != null && rememberedIdx != null) {
+                val key = session.currentDevice?.let { CameraModePrefs.modelKey(it) } ?: "?"
+                FileLogger.log(
+                    "Restored remembered mode ${mode.sizeLabel} @${preferFps}fps for $key"
+                )
+            }
         } else {
             dropdownResolution.setText("", false)
             clearFpsDropdown()
@@ -549,6 +567,18 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         return mode.defaultFps.takeIf { mode.fpsList.contains(it) } ?: mode.fpsList.firstOrNull()
     }
 
+    private fun selectModeInUi(mode: StreamMode, fps: Int) {
+        suppressResolutionCallback = true
+        dropdownResolution.setText(mode.sizeLabel, false)
+        suppressResolutionCallback = false
+        bindFpsDropdown(mode, preferFps = fps)
+    }
+
+    private fun rememberSuccess(width: Int, height: Int, fps: Int) {
+        val device = session.currentDevice ?: return
+        CameraModePrefs.save(this, device, width, height, fps)
+    }
+
     private fun applySelectedMode() {
         val mode = selectedMode()
         if (mode == null) {
@@ -571,14 +601,62 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
         val startRes = session.startStream(mode.width, mode.height, fps)
         if (startRes == 0) {
+            rememberSuccess(mode.width, mode.height, fps)
             setSwitchChecked(true)
             updateStatus(getString(R.string.status_streaming, mode.width, mode.height, fps))
-        } else {
+            return
+        }
+
+        FileLogger.log(
+            "applySelectedMode: ${mode.sizeLabel}@$fps failed ($startRes), trying device default"
+        )
+        session.currentDevice?.let { CameraModePrefs.clear(this, it) }
+
+        val defaultMode = StreamMode.deviceDefault(streamModes)
+        val defaultFps = defaultMode?.defaultFps
+        val canFallback = defaultMode != null &&
+            defaultFps != null &&
+            (defaultMode.width != mode.width ||
+                defaultMode.height != mode.height ||
+                defaultFps != fps)
+
+        if (canFallback) {
+            val fallbackRes = session.startStream(defaultMode!!.width, defaultMode.height, defaultFps!!)
+            if (fallbackRes == 0) {
+                selectModeInUi(defaultMode, defaultFps)
+                rememberSuccess(defaultMode.width, defaultMode.height, defaultFps)
+                setSwitchChecked(true)
+                updateStatus(
+                    getString(
+                        R.string.status_streaming_fallback,
+                        defaultMode.width,
+                        defaultMode.height,
+                        defaultFps,
+                    )
+                )
+                return
+            }
+            FileLogger.log(
+                "applySelectedMode: default ${defaultMode.sizeLabel}@$defaultFps " +
+                    "also failed ($fallbackRes)"
+            )
             setSwitchChecked(false)
             updateStatus(
-                getString(R.string.status_stream_error, startRes, mode.width, mode.height, fps)
+                getString(
+                    R.string.status_stream_error,
+                    fallbackRes,
+                    defaultMode.width,
+                    defaultMode.height,
+                    defaultFps,
+                )
             )
+            return
         }
+
+        setSwitchChecked(false)
+        updateStatus(
+            getString(R.string.status_stream_error, startRes, mode.width, mode.height, fps)
+        )
     }
 
     private fun stopStreaming() {

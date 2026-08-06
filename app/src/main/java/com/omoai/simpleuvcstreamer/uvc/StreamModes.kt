@@ -73,6 +73,15 @@ data class StreamMode(
             return modes.lastIndex.coerceAtLeast(0)
         }
 
+        fun deviceDefault(modes: List<StreamMode>): StreamMode? {
+            if (modes.isEmpty()) return null
+            return modes[preferredIndex(modes)]
+        }
+
+        fun indexOfSize(modes: List<StreamMode>, width: Int, height: Int): Int {
+            return modes.indexOfFirst { it.width == width && it.height == height }
+        }
+
         fun parseFpsLabel(label: String): Int? {
             return label.trim().removeSuffix("fps").trim().toIntOrNull()
         }
