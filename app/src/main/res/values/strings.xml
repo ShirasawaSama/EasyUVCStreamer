@@ -12,6 +12,7 @@
     <string name="label_resolution">分辨率</string>
     <string name="label_fps">帧率</string>
     <string name="switch_stream">开始采集</string>
+    <string name="switch_auto_start">启动时自动采集并开推流服务</string>
     <string name="switch_auto_launch">插入摄像头时自动打开应用</string>
     <string name="switch_preview">本机预览（费电，默认关）</string>
 

@@ -142,6 +142,15 @@
                     android:textAppearance="@style/Text.Uvc.Body" />
 
                 <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchAutoStart"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:checked="false"
+                    android:text="@string/switch_auto_start"
+                    android:textAppearance="@style/Text.Uvc.Body" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/switchAutoLaunch"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

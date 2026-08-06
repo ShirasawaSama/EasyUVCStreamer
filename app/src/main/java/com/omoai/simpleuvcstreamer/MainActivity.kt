@@ -36,7 +36,8 @@ import com.omoai.simpleuvcstreamer.usb.UsbDeviceMonitor
 import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
 import com.omoai.simpleuvcstreamer.util.AppPermissions
 import com.omoai.simpleuvcstreamer.util.FileLogger
-import com.omoai.simpleuvcstreamer.uvc.CameraModePrefs
+import com.omoai.simpleuvcstreamer.uvc.AutoStartPrefs
+import com.omoai.simpleuvcstreamer.uvc.DeviceHistory
 import com.omoai.simpleuvcstreamer.uvc.StreamMode
 import com.omoai.simpleuvcstreamer.uvc.UvcNative
 import com.omoai.simpleuvcstreamer.uvc.UvcSession
@@ -54,6 +55,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private lateinit var tvStatus: TextView
     private lateinit var tvFps: TextView
     private lateinit var switchStream: MaterialSwitch
+    private lateinit var switchAutoStart: MaterialSwitch
     private lateinit var switchAutoLaunch: MaterialSwitch
     private lateinit var switchPreview: MaterialSwitch
     private lateinit var previewContainer: MaterialCardView
@@ -80,6 +82,8 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private var suppressFpsCallback = false
     private var pendingStartAfterPermission = false
     private var lastAccessSignature: String = ""
+    /** Consume once: auto-start stream after app launch when [AutoStartPrefs] is on. */
+    private var pendingLaunchAutoStart = false
 
     private var lastHttpStateText: String = ""
 
@@ -116,6 +120,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         tvStatus = findViewById(R.id.tvStatus)
         tvFps = findViewById(R.id.tvFps)
         switchStream = findViewById(R.id.switchStream)
+        switchAutoStart = findViewById(R.id.switchAutoStart)
         switchAutoLaunch = findViewById(R.id.switchAutoLaunch)
         switchPreview = findViewById(R.id.switchPreview)
         previewContainer = findViewById(R.id.previewContainer)
@@ -153,8 +158,21 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
 
         editHttpPort.setText(httpStream.port.toString())
-        val httpOk = httpStream.ensureStarted()
-        FileLogger.log("HTTP auto-start ok=$httpOk port=${httpStream.port}")
+        switchAutoStart.isChecked = AutoStartPrefs.isEnabled(this)
+        if (switchAutoStart.isChecked) {
+            pendingLaunchAutoStart = true
+            val httpOk = httpStream.ensureStarted()
+            FileLogger.log("HTTP auto-start ok=$httpOk port=${httpStream.port}")
+        } else {
+            FileLogger.log("HTTP auto-start skipped (option off)")
+        }
+        switchAutoStart.setOnCheckedChangeListener { _, checked ->
+            AutoStartPrefs.setEnabled(this, checked)
+            if (checked && !httpStream.isRunning) {
+                httpStream.ensureStarted()
+                refreshHttpUi(forceList = true)
+            }
+        }
         btnApplyHttpPort.setOnClickListener { applyHttpPortFromUi() }
         editHttpPort.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_DONE) {
@@ -224,11 +242,10 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         val device = readUsbDeviceExtra(intent) ?: return
         FileLogger.log("USB attach intent: ${device.deviceName} ${device.productName}")
         if (!::session.isInitialized || !UvcNative.isLibLoaded) return
-        refreshDeviceList()
-        if (autoStart && UsbAutoLaunch.isEnabled(this) && !switchStream.isChecked) {
-            setSwitchChecked(true)
-            prepareDevice(device, startStream = true)
-        }
+        val wantStream = autoStart &&
+            AutoStartPrefs.isEnabled(this) &&
+            !session.isStreaming
+        refreshDeviceList(preferDevice = device, forceAutoStream = wantStream)
     }
 
     private fun readUsbDeviceExtra(intent: Intent): UsbDevice? {
@@ -367,7 +384,13 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         Toast.makeText(this, R.string.http_copied, Toast.LENGTH_SHORT).show()
     }
 
-    override fun onDeviceAttached() = refreshDeviceList()
+    override fun onDeviceAttached() {
+        if (session.isStreaming) {
+            refreshDeviceList()
+        } else {
+            refreshDeviceList(forceAutoStream = AutoStartPrefs.isEnabled(this))
+        }
+    }
 
     override fun onDeviceDetached(device: UsbDevice) {
         if (UvcDeviceFinder.sameDevice(device, session.currentDevice)) {
@@ -412,32 +435,80 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
     }
 
-    private fun refreshDeviceList() {
+    private fun refreshDeviceList(
+        preferDevice: UsbDevice? = null,
+        forceAutoStream: Boolean = false,
+    ) {
+        val previous = uvcDevices
         uvcDevices = UvcDeviceFinder.listUvcDevices(usbManager)
         FileLogger.log("UVC Device count: ${uvcDevices.size}")
 
+        // Newly appeared devices count as "just connected" for history ranking.
+        for (device in uvcDevices) {
+            val isNew = previous.none { it.deviceName == device.deviceName }
+            if (isNew) {
+                DeviceHistory.touch(this, device)
+            }
+        }
+        preferDevice?.let { preferred ->
+            uvcDevices.firstOrNull { it.deviceName == preferred.deviceName }
+                ?.let { DeviceHistory.touch(this, it) }
+        }
+
+        val selected = pickDeviceForUi()
         val labels = uvcDevices.map { UvcDeviceFinder.labelFor(it) }
-        val previousName = session.currentDevice?.deviceName
-        val keepIndex = uvcDevices.indexOfFirst { it.deviceName == previousName }.coerceAtLeast(0)
+        val selectedIndex = selected?.let { sel ->
+            uvcDevices.indexOfFirst { it.deviceName == sel.deviceName }
+        }?.takeIf { it >= 0 } ?: 0
 
         suppressDeviceCallback = true
         dropdownDevice.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
         if (labels.isNotEmpty()) {
-            dropdownDevice.setText(labels[keepIndex], false)
+            dropdownDevice.setText(labels[selectedIndex], false)
         } else {
             dropdownDevice.setText("", false)
         }
         suppressDeviceCallback = false
 
         if (uvcDevices.isEmpty()) {
+            pendingLaunchAutoStart = false
             session.close()
             clearModes()
             updateStatus(getString(R.string.status_no_device))
             return
         }
 
-        val selected = uvcDevices.getOrNull(keepIndex) ?: uvcDevices.first()
-        prepareDevice(selected, startStream = switchStream.isChecked)
+        val launchAuto = pendingLaunchAutoStart && AutoStartPrefs.isEnabled(this)
+        pendingLaunchAutoStart = false
+        val wantStart = !session.isStreaming && (
+            switchStream.isChecked || forceAutoStream || launchAuto
+        )
+
+        if (wantStart) {
+            ensureHttpRunning()
+        }
+
+        prepareDevice(selected ?: uvcDevices.first(), startStream = wantStart)
+    }
+
+    /**
+     * While streaming, keep the current device if still plugged.
+     * Otherwise prefer the most recently used model among connected devices.
+     */
+    private fun pickDeviceForUi(): UsbDevice? {
+        if (uvcDevices.isEmpty()) return null
+        if (session.isStreaming) {
+            val current = session.currentDevice
+            uvcDevices.firstOrNull { UvcDeviceFinder.sameDevice(it, current) }?.let { return it }
+        }
+        return DeviceHistory.pickPreferred(this, uvcDevices) ?: uvcDevices.first()
+    }
+
+    private fun ensureHttpRunning() {
+        if (httpStream.isRunning) return
+        val ok = httpStream.ensureStarted()
+        FileLogger.log("HTTP ensureStarted ok=$ok port=${httpStream.port}")
+        refreshHttpUi(forceList = true)
     }
 
     private fun prepareDevice(device: UsbDevice, startStream: Boolean) {
@@ -466,6 +537,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             updateStatus(getString(R.string.status_open_failed))
             return
         }
+        DeviceHistory.touch(this, device)
 
         val modes = loadModesIntoDropdown(session.loadStreamModes())
         if (modes.isEmpty()) {
@@ -476,6 +548,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
         updateStatus(getString(R.string.status_resolutions_ready, modes.size))
         if (startStream) {
+            ensureHttpRunning()
             applySelectedMode()
         }
     }
@@ -486,7 +559,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         suppressResolutionCallback = true
         dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
         if (modes.isNotEmpty()) {
-            val remembered = session.currentDevice?.let { CameraModePrefs.load(this, it) }
+            val remembered = session.currentDevice?.let { DeviceHistory.loadMode(this, it) }
             val rememberedIdx = remembered?.let {
                 StreamMode.indexOfSize(modes, it.width, it.height)
             }?.takeIf { it >= 0 }
@@ -502,7 +575,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             dropdownResolution.setText(mode.sizeLabel, false)
             bindFpsDropdown(mode, preferFps = preferFps)
             if (remembered != null && rememberedIdx != null) {
-                val key = session.currentDevice?.let { CameraModePrefs.modelKey(it) } ?: "?"
+                val key = session.currentDevice?.let { DeviceHistory.modelKey(it) } ?: "?"
                 FileLogger.log(
                     "Restored remembered mode ${mode.sizeLabel} @${preferFps}fps for $key"
                 )
@@ -547,6 +620,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             updateStatus(getString(R.string.status_no_device))
             return
         }
+        ensureHttpRunning()
         val label = dropdownDevice.text?.toString()
         val index = uvcDevices.indexOfFirst { UvcDeviceFinder.labelFor(it) == label }.coerceAtLeast(0)
         val device = uvcDevices.getOrNull(index) ?: run {
@@ -576,7 +650,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
     private fun rememberSuccess(width: Int, height: Int, fps: Int) {
         val device = session.currentDevice ?: return
-        CameraModePrefs.save(this, device, width, height, fps)
+        DeviceHistory.saveMode(this, device, width, height, fps)
     }
 
     private fun applySelectedMode() {
@@ -610,7 +684,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         FileLogger.log(
             "applySelectedMode: ${mode.sizeLabel}@$fps failed ($startRes), trying device default"
         )
-        session.currentDevice?.let { CameraModePrefs.clear(this, it) }
+        session.currentDevice?.let { DeviceHistory.clearMode(this, it) }
 
         val defaultMode = StreamMode.deviceDefault(streamModes)
         val defaultFps = defaultMode?.defaultFps
