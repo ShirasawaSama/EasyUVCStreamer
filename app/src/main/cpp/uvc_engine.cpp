@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -23,12 +24,34 @@ namespace {
 
 std::atomic<bool> g_is_streaming{false};
 std::atomic<bool> g_stop_event_thread{false};
+std::atomic<int> g_event_errors{0};
 
+std::mutex g_dev_mu;
 libusb_context *g_usb_ctx = nullptr;
 uvc_context_t *g_uvc_ctx = nullptr;
 uvc_device_handle_t *g_devh = nullptr;
 std::thread g_event_thread;
 bool g_event_thread_started = false;
+
+void stop_streaming_unlocked() {
+    g_is_streaming.store(false, std::memory_order_release);
+    if (!g_devh) return;
+    // May block briefly; Android overlay uses timed wait on hot-unplug.
+    uvc_stop_streaming(g_devh);
+}
+
+void close_handle_unlocked() {
+    g_is_streaming.store(false, std::memory_order_release);
+    frame_pipeline::clear();
+    if (!g_devh) return;
+    uvc_device_handle_t *tmp = g_devh;
+    g_devh = nullptr;
+    // Stop before close; ignore failures when the USB device is already gone.
+    uvc_stop_streaming(tmp);
+    uvc_close(tmp);
+    g_event_errors.store(0, std::memory_order_relaxed);
+    LOGI("nativeClose: Device handle closed");
+}
 
 void uvc_event_thread_func() {
     LOGI("uvc_event_thread: Started");
@@ -40,8 +63,13 @@ void uvc_event_thread_func() {
         }
         int res = libusb_handle_events_timeout_completed(g_usb_ctx, &tv, nullptr);
         if (res < 0) {
-            LOGE("libusb_handle_events failed: %d", res);
+            int n = g_event_errors.fetch_add(1, std::memory_order_relaxed) + 1;
+            LOGE("libusb_handle_events failed: %d (n=%d)", res, n);
+            // Device likely gone — stop delivering frames; Java will close on DETACH.
+            g_is_streaming.store(false, std::memory_order_release);
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        } else {
+            g_event_errors.store(0, std::memory_order_relaxed);
         }
     }
     LOGI("uvc_event_thread: Stopped");
@@ -49,7 +77,8 @@ void uvc_event_thread_func() {
 
 void uvc_frame_callback(uvc_frame_t *frame, void *ptr) {
     (void) ptr;
-    if (!g_is_streaming.load(std::memory_order_relaxed)) return;
+    if (!g_is_streaming.load(std::memory_order_acquire)) return;
+    if (!frame) return;
     frame_pipeline::on_frame(frame);
 }
 
@@ -72,6 +101,7 @@ void log_usb_interfaces(libusb_device_handle *usb_devh) {
 }  // namespace
 
 int init() {
+    std::lock_guard<std::mutex> lock(g_dev_mu);
     if (g_uvc_ctx) return 0;
 
     LOGI("nativeInit: Start");
@@ -107,52 +137,45 @@ int open_device(int fd) {
         if (ir < 0) return -100 + ir;
     }
 
+    std::lock_guard<std::mutex> lock(g_dev_mu);
+    if (!g_uvc_ctx) return -1;
+
     if (g_devh) {
-        g_is_streaming.store(false);
-        uvc_stop_streaming(g_devh);
-        uvc_close(g_devh);
-        g_devh = nullptr;
+        close_handle_unlocked();
     }
 
     LOGI("nativeOpenDevice: Wrapping FD %d", fd);
     uvc_error_t res = uvc_wrap(fd, g_uvc_ctx, &g_devh);
     if (res < 0) {
         LOGE("uvc_wrap failed: %d", res);
+        g_devh = nullptr;
         return (int) res;
     }
 
     libusb_device_handle *usb = uvc_get_libusb_handle(g_devh);
     if (usb) log_usb_interfaces(usb);
 
+    g_event_errors.store(0, std::memory_order_relaxed);
     LOGI("nativeOpenDevice: Success");
     return 0;
 }
 
 void stop_stream() {
-    g_is_streaming.store(false);
-    if (g_devh) {
-        uvc_stop_streaming(g_devh);
-        LOGI("nativeStopStream: Streaming stopped (device kept open)");
-    }
+    std::lock_guard<std::mutex> lock(g_dev_mu);
+    stop_streaming_unlocked();
+    LOGI("nativeStopStream: Streaming stopped (device kept open)");
 }
 
 void close_device() {
-    g_is_streaming.store(false);
-    frame_pipeline::clear();
-    if (g_devh) {
-        uvc_stop_streaming(g_devh);
-        uvc_device_handle_t *tmp = g_devh;
-        g_devh = nullptr;
-        uvc_close(tmp);
-        LOGI("nativeClose: Device handle closed");
-    }
+    std::lock_guard<std::mutex> lock(g_dev_mu);
+    close_handle_unlocked();
 }
 
 int start_stream(int width, int height, int fps) {
+    std::lock_guard<std::mutex> lock(g_dev_mu);
     if (!g_devh) return -1;
 
-    g_is_streaming.store(false);
-    uvc_stop_streaming(g_devh);
+    stop_streaming_unlocked();
 
     uvc_stream_ctrl_t ctrl{};
     uvc_error_t res = get_mjpeg_stream_ctrl(g_devh, &ctrl, width, height, fps);
@@ -162,12 +185,12 @@ int start_stream(int width, int height, int fps) {
     }
 
     frame_pipeline::reset_counters();
-    g_is_streaming.store(true);
+    g_is_streaming.store(true, std::memory_order_release);
 
     res = uvc_start_streaming(g_devh, &ctrl, uvc_frame_callback, nullptr, 0);
     if (res < 0) {
         LOGE("uvc_start_streaming failed: %d", res);
-        g_is_streaming.store(false);
+        g_is_streaming.store(false, std::memory_order_release);
     } else {
         LOGI("nativeStartStream: Streaming %dx%d if=%u interval=%u maxPayload=%u",
              width, height, ctrl.bInterfaceNumber, ctrl.dwFrameInterval, ctrl.dwMaxPayloadTransferSize);
@@ -181,6 +204,7 @@ int get_frame_count() {
 
 std::string get_resolutions() {
     // Wire: WxH|fps1,fps2|defaultFps|isDeviceDefault;
+    std::lock_guard<std::mutex> lock(g_dev_mu);
     if (!g_devh) return "";
 
     auto interval_to_fps = [](uint32_t interval_100ns) -> int {
@@ -259,7 +283,6 @@ std::string get_resolutions() {
             agg.fps.insert(30);
         }
         if (agg.default_fps == 0 || agg.fps.count(agg.default_fps) == 0) {
-            // Prefer ~30 if present, else highest
             if (agg.fps.count(30)) {
                 agg.default_fps = 30;
             } else {

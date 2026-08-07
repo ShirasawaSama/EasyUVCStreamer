@@ -1,0 +1,70 @@
+--- a/src/stream.c
++++ b/src/stream.c
+@@ -37,8 +37,11 @@
+  */
+ 
+ #include "libuvc/libuvc.h"
+ #ifdef __ANDROID__
+ #include <android/log.h>
++#include <time.h>
+ #endif
+ #include "libuvc/libuvc_internal.h"
+ #include "errno.h"
+ 
+@@ -1520,6 +1523,9 @@
+ 
+   pthread_mutex_lock(&strmh->cb_mutex);
+ 
++#if defined(__ANDROID__)
++  /* Hot-unplug: never free transfers here; wait with timeout (see below). */
++#endif
+   /* Attempt to cancel any running transfers, we can't free them just yet because they aren't
+    *   necessarily completed but they will be free'd in _uvc_stream_callback().
+    */
+@@ -1528,15 +1534,44 @@
+       libusb_cancel_transfer(strmh->transfers[i]);
+   }
+ 
++#if defined(__ANDROID__)
++  {
++    struct timespec ts;
++    clock_gettime(CLOCK_REALTIME, &ts);
++    ts.tv_nsec += 500000000L; /* 500ms */
++    if (ts.tv_nsec >= 1000000000L) {
++      ts.tv_sec += 1;
++      ts.tv_nsec -= 1000000000L;
++    }
++    do {
++      for(i=0; i < LIBUVC_NUM_TRANSFER_BUFS; i++) {
++        if(strmh->transfers[i] != NULL)
++          break;
++      }
++      if(i == LIBUVC_NUM_TRANSFER_BUFS )
++        break;
++      if (pthread_cond_timedwait(&strmh->cb_cond, &strmh->cb_mutex, &ts) == ETIMEDOUT) {
++        __android_log_print(ANDROID_LOG_WARN, "libuvc",
++                            "uvc_stream_stop: timed out waiting for transfers (hot-unplug?)");
++        /* Abandon remaining transfers to unblock stop. Intentional leak if a
++         * late callback still fires — safer than UAF / infinite wait. */
++        for(i=0; i < LIBUVC_NUM_TRANSFER_BUFS; i++) {
++          strmh->transfers[i] = NULL;
++        }
++        break;
++      }
++    } while(1);
++  }
++#else
+   /* Wait for transfers to complete/cancel */
+   do {
+     for(i=0; i < LIBUVC_NUM_TRANSFER_BUFS; i++) {
+       if(strmh->transfers[i] != NULL)
+         break;
+     }
+     if(i == LIBUVC_NUM_TRANSFER_BUFS )
+       break;
+     pthread_cond_wait(&strmh->cb_cond, &strmh->cb_mutex);
+   } while(1);
++#endif
+   // Kick the user thread awake
+   pthread_cond_broadcast(&strmh->cb_cond);
+   pthread_mutex_unlock(&strmh->cb_mutex);

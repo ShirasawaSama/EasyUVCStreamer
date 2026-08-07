@@ -7,6 +7,7 @@ vcpkg_from_github(
     PATCHES
         build_fix.patch
         android_iso_fix.patch
+        android_hotunplug_fix.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

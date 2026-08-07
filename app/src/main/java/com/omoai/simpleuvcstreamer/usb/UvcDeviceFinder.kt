@@ -31,7 +31,12 @@ object UvcDeviceFinder {
             val intf = device.getInterface(i)
             if (intf.interfaceClass != USB_CLASS_VIDEO) continue
             if (!claimedIds.add(intf.id)) continue
-            val ok = conn.claimInterface(intf, true)
+            val ok = try {
+                conn.claimInterface(intf, true)
+            } catch (t: Throwable) {
+                FileLogger.log("claimInterface if=${intf.id} threw: ${t.message}")
+                false
+            }
             FileLogger.log(
                 "claimInterface if=${intf.id} class=${intf.interfaceClass}/" +
                     "${intf.interfaceSubclass} -> $ok"

@@ -84,6 +84,8 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private var lastAccessSignature: String = ""
     /** Consume once: auto-start stream after app launch when [AutoStartPrefs] is on. */
     private var pendingLaunchAutoStart = false
+    /** After hot-unplug, suppress auto reopen briefly so bump/reconnect can settle. */
+    private var suppressAutoOpenUntilMs: Long = 0L
 
     private var lastHttpStateText: String = ""
 
@@ -244,7 +246,8 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         if (!::session.isInitialized || !UvcNative.isLibLoaded) return
         val wantStream = autoStart &&
             AutoStartPrefs.isEnabled(this) &&
-            !session.isStreaming
+            !session.isStreaming &&
+            !isAutoOpenSuppressed()
         refreshDeviceList(preferDevice = device, forceAutoStream = wantStream)
     }
 
@@ -387,18 +390,34 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     override fun onDeviceAttached() {
         if (session.isStreaming) {
             refreshDeviceList()
-        } else {
-            refreshDeviceList(forceAutoStream = AutoStartPrefs.isEnabled(this))
+            return
         }
+        val auto = AutoStartPrefs.isEnabled(this) && !isAutoOpenSuppressed()
+        refreshDeviceList(forceAutoStream = auto)
     }
 
     override fun onDeviceDetached(device: UsbDevice) {
         if (UvcDeviceFinder.sameDevice(device, session.currentDevice)) {
-            session.close()
+            FileLogger.log("Current UVC device detached — stopping cleanly")
+            // Turn off stream switch first so refreshDeviceList will not reopen.
+            setSwitchChecked(false)
+            suppressAutoOpen(2500L)
+            pendingStartAfterPermission = false
+            pendingLaunchAutoStart = false
+            runCatching { session.close() }
+                .onFailure { FileLogger.log("session.close on detach: ${it.message}") }
             clearModes()
             updateStatus(getString(R.string.status_device_detached))
         }
         refreshDeviceList()
+    }
+
+    private fun suppressAutoOpen(ms: Long) {
+        suppressAutoOpenUntilMs = System.currentTimeMillis() + ms
+    }
+
+    private fun isAutoOpenSuppressed(): Boolean {
+        return System.currentTimeMillis() < suppressAutoOpenUntilMs
     }
 
     override fun onPermissionResult(device: UsbDevice?, granted: Boolean) {
@@ -480,9 +499,9 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
         val launchAuto = pendingLaunchAutoStart && AutoStartPrefs.isEnabled(this)
         pendingLaunchAutoStart = false
-        val wantStart = !session.isStreaming && (
-            switchStream.isChecked || forceAutoStream || launchAuto
-        )
+        val wantStart = !session.isStreaming &&
+            !isAutoOpenSuppressed() &&
+            (switchStream.isChecked || forceAutoStream || launchAuto)
 
         if (wantStart) {
             ensureHttpRunning()

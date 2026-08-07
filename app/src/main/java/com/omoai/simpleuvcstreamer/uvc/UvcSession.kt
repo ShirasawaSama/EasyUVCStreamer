@@ -28,17 +28,38 @@ class UvcSession(private val usbManager: UsbManager) {
         FileLogger.log("Opening device: ${device.deviceName}")
         close()
 
-        val conn = usbManager.openDevice(device)
+        val conn = try {
+            usbManager.openDevice(device)
+        } catch (t: Throwable) {
+            FileLogger.log("openDevice threw: ${t.message}")
+            null
+        }
         if (conn == null) {
             FileLogger.log("Failed to open UsbConnection")
             return false
         }
 
-        UvcDeviceFinder.claimVideoInterfaces(conn, device)
+        try {
+            UvcDeviceFinder.claimVideoInterfaces(conn, device)
+        } catch (t: Throwable) {
+            FileLogger.log("claimVideoInterfaces threw: ${t.message}")
+            try {
+                conn.close()
+            } catch (_: Throwable) {
+            }
+            return false
+        }
+
         usbConnection = conn
         currentDevice = device
 
-        val res = UvcNative.nativeOpenDevice(conn.fileDescriptor)
+        val res = try {
+            UvcNative.nativeOpenDevice(conn.fileDescriptor)
+        } catch (t: Throwable) {
+            FileLogger.log("nativeOpenDevice threw: ${t.message}")
+            close()
+            return false
+        }
         FileLogger.log("nativeOpenDevice res: $res")
         if (res != 0) {
             close()
@@ -48,14 +69,25 @@ class UvcSession(private val usbManager: UsbManager) {
     }
 
     fun loadStreamModes(): List<StreamMode> {
-        val raw = UvcNative.nativeGetResolutions()
-        FileLogger.log("Available modes: $raw")
-        return StreamMode.parse(raw)
+        return try {
+            val raw = UvcNative.nativeGetResolutions()
+            FileLogger.log("Available modes: $raw")
+            StreamMode.parse(raw)
+        } catch (t: Throwable) {
+            FileLogger.log("loadStreamModes threw: ${t.message}")
+            emptyList()
+        }
     }
 
     fun startStream(width: Int, height: Int, fps: Int): Int {
         FileLogger.log("Starting/switching stream to ${width}x${height} @${fps}fps")
-        val startRes = UvcNative.nativeStartStream(width, height, fps)
+        val startRes = try {
+            UvcNative.nativeStartStream(width, height, fps)
+        } catch (t: Throwable) {
+            FileLogger.log("nativeStartStream threw: ${t.message}")
+            isStreaming = false
+            return -1
+        }
         FileLogger.log("nativeStartStream result: $startRes")
         isStreaming = startRes == 0
         return startRes
@@ -64,21 +96,37 @@ class UvcSession(private val usbManager: UsbManager) {
     fun stopStream() {
         FileLogger.log("Stopping stream (keep device open)...")
         isStreaming = false
-        UvcNative.nativeStopStream()
+        try {
+            UvcNative.nativeStopStream()
+        } catch (t: Throwable) {
+            FileLogger.log("nativeStopStream threw: ${t.message}")
+        }
     }
 
     fun close() {
         isStreaming = false
-        UvcNative.nativeClose()
+        try {
+            UvcNative.nativeClose()
+        } catch (t: Throwable) {
+            FileLogger.log("nativeClose threw: ${t.message}")
+        }
         val conn = usbConnection
         val device = currentDevice
         if (conn != null && device != null) {
             UvcDeviceFinder.releaseVideoInterfaces(conn, device)
         }
-        conn?.close()
+        try {
+            conn?.close()
+        } catch (t: Throwable) {
+            FileLogger.log("UsbDeviceConnection.close threw: ${t.message}")
+        }
         usbConnection = null
         currentDevice = null
     }
 
-    fun frameCountPerSecond(): Int = UvcNative.nativeGetFrameCount()
+    fun frameCountPerSecond(): Int = try {
+        UvcNative.nativeGetFrameCount()
+    } catch (_: Throwable) {
+        0
+    }
 }
