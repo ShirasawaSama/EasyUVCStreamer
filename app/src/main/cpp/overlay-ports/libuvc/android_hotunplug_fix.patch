@@ -1,8 +1,8 @@
+diff --git a/src/stream.c b/src/stream.c
+index b29c944..7834652 100644
 --- a/src/stream.c
 +++ b/src/stream.c
-@@ -37,8 +37,11 @@
-  */
- 
+@@ -39,6 +39,7 @@
  #include "libuvc/libuvc.h"
  #ifdef __ANDROID__
  #include <android/log.h>
@@ -10,18 +10,7 @@
  #endif
  #include "libuvc/libuvc_internal.h"
  #include "errno.h"
- 
-@@ -1520,6 +1523,9 @@
- 
-   pthread_mutex_lock(&strmh->cb_mutex);
- 
-+#if defined(__ANDROID__)
-+  /* Hot-unplug: never free transfers here; wait with timeout (see below). */
-+#endif
-   /* Attempt to cancel any running transfers, we can't free them just yet because they aren't
-    *   necessarily completed but they will be free'd in _uvc_stream_callback().
-    */
-@@ -1528,15 +1534,44 @@
+@@ -1527,6 +1528,35 @@ uvc_error_t uvc_stream_stop(uvc_stream_handle_t *strmh) {
        libusb_cancel_transfer(strmh->transfers[i]);
    }
  
@@ -57,10 +46,7 @@
    /* Wait for transfers to complete/cancel */
    do {
      for(i=0; i < LIBUVC_NUM_TRANSFER_BUFS; i++) {
-       if(strmh->transfers[i] != NULL)
-         break;
-     }
-     if(i == LIBUVC_NUM_TRANSFER_BUFS )
+@@ -1537,6 +1567,7 @@ uvc_error_t uvc_stream_stop(uvc_stream_handle_t *strmh) {
        break;
      pthread_cond_wait(&strmh->cb_cond, &strmh->cb_mutex);
    } while(1);
