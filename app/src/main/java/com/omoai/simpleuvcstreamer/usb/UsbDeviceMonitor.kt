@@ -16,7 +16,7 @@ class UsbDeviceMonitor(
     private val listener: Listener
 ) {
     interface Listener {
-        fun onDeviceAttached()
+        fun onDeviceAttached(device: UsbDevice?)
         fun onDeviceDetached(device: UsbDevice)
         fun onPermissionResult(device: UsbDevice?, granted: Boolean)
     }
@@ -25,7 +25,8 @@ class UsbDeviceMonitor(
         override fun onReceive(ctx: Context, intent: Intent) {
             FileLogger.log("USB Event: ${intent.action}")
             when (intent.action) {
-                UsbManager.ACTION_USB_DEVICE_ATTACHED -> listener.onDeviceAttached()
+                UsbManager.ACTION_USB_DEVICE_ATTACHED ->
+                    listener.onDeviceAttached(readUsbDevice(intent))
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     readUsbDevice(intent)?.let { listener.onDeviceDetached(it) }
                 }
@@ -60,12 +61,17 @@ class UsbDeviceMonitor(
     }
 
     fun requestPermission(usbManager: UsbManager, device: UsbDevice) {
+        // Must be explicit + mutable: UsbService writes EXTRA_PERMISSION_GRANTED
+        // into the PI. FLAG_IMMUTABLE / implicit intents drop the result on API 31+.
         val intent = Intent(permissionAction).apply {
+            setPackage(context.packageName)
             putExtra(UsbManager.EXTRA_DEVICE, device)
         }
-        val pi = PendingIntent.getBroadcast(
-            context, 0, intent, PendingIntent.FLAG_IMMUTABLE
-        )
+        var flags = PendingIntent.FLAG_UPDATE_CURRENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            flags = flags or PendingIntent.FLAG_MUTABLE
+        }
+        val pi = PendingIntent.getBroadcast(context, 0, intent, flags)
         usbManager.requestPermission(device, pi)
     }
 

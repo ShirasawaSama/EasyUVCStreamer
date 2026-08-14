@@ -86,6 +86,13 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private var pendingLaunchAutoStart = false
     /** After hot-unplug, suppress auto reopen briefly so bump/reconnect can settle. */
     private var suppressAutoOpenUntilMs: Long = 0L
+    /** Capture was on when the cable came out — resume after the same camera returns. */
+    private var resumeStreamOnReattach = false
+    private var permissionWaitDeviceName: String? = null
+    private var pendingRefreshDevice: UsbDevice? = null
+    private var pendingRefreshAuto = false
+    private var permissionRetryDevice: UsbDevice? = null
+    private var permissionRetryStart = false
 
     private var lastHttpStateText: String = ""
 
@@ -110,6 +117,16 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             refreshHttpUi(forceList = false)
             fpsHandler.postDelayed(this, 1000)
         }
+    }
+    private val usbRetryRunnable = Runnable {
+        refreshDeviceList(
+            preferDevice = pendingRefreshDevice,
+            forceAutoStream = pendingRefreshAuto || shouldResumeStream(),
+        )
+    }
+    private val permissionRetryRunnable = Runnable {
+        val device = permissionRetryDevice ?: return@Runnable
+        prepareDevice(device, startStream = permissionRetryStart || shouldResumeStream())
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -202,8 +219,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
 
         switchStream.setOnCheckedChangeListener { _, isChecked ->
-            FileLogger.log("Switch changed: $isChecked")
-            if (isChecked) startStreaming() else stopStreaming()
+            onStreamSwitchChanged(isChecked)
         }
 
         ensureRuntimePermissionsThenStartUsb()
@@ -246,10 +262,9 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         FileLogger.log("USB attach intent: ${device.deviceName} ${device.productName}")
         if (!::session.isInitialized || !UvcNative.isLibLoaded) return
         val wantStream = autoStart &&
-            AutoStartPrefs.isEnabled(this) &&
             !session.isStreaming &&
-            !isAutoOpenSuppressed()
-        refreshDeviceList(preferDevice = device, forceAutoStream = wantStream)
+            (resumeStreamOnReattach || AutoStartPrefs.isEnabled(this))
+        scheduleDeviceRefresh(preferDevice = device, forceAutoStream = wantStream)
     }
 
     private fun readUsbDeviceExtra(intent: Intent): UsbDevice? {
@@ -395,29 +410,50 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         Toast.makeText(this, R.string.qq_group_copied, Toast.LENGTH_SHORT).show()
     }
 
-    override fun onDeviceAttached() {
+    override fun onDeviceAttached(device: UsbDevice?) {
         if (session.isStreaming) {
             refreshDeviceList()
             return
         }
-        val auto = AutoStartPrefs.isEnabled(this) && !isAutoOpenSuppressed()
-        refreshDeviceList(forceAutoStream = auto)
+        val auto = shouldResumeStream()
+        scheduleDeviceRefresh(preferDevice = device, forceAutoStream = auto)
     }
 
     override fun onDeviceDetached(device: UsbDevice) {
         if (UvcDeviceFinder.sameDevice(device, session.currentDevice)) {
             FileLogger.log("Current UVC device detached — stopping cleanly")
-            // Turn off stream switch first so refreshDeviceList will not reopen.
+            resumeStreamOnReattach = session.isStreaming || switchStream.isChecked
+            // Turn off stream switch first so refreshDeviceList will not reopen immediately.
             setSwitchChecked(false)
             suppressAutoOpen(2500L)
             pendingStartAfterPermission = false
             pendingLaunchAutoStart = false
+            permissionWaitDeviceName = null
+            fpsHandler.removeCallbacks(usbRetryRunnable)
+            fpsHandler.removeCallbacks(permissionRetryRunnable)
             runCatching { session.close() }
                 .onFailure { FileLogger.log("session.close on detach: ${it.message}") }
             clearModes()
             updateStatus(getString(R.string.status_device_detached))
         }
         refreshDeviceList()
+    }
+
+    private fun shouldResumeStream(): Boolean {
+        return resumeStreamOnReattach || AutoStartPrefs.isEnabled(this)
+    }
+
+    private fun scheduleDeviceRefresh(preferDevice: UsbDevice?, forceAutoStream: Boolean) {
+        fpsHandler.removeCallbacks(usbRetryRunnable)
+        val delay = (suppressAutoOpenUntilMs - System.currentTimeMillis()).coerceAtLeast(0L)
+        if (delay == 0L) {
+            refreshDeviceList(preferDevice = preferDevice, forceAutoStream = forceAutoStream)
+            return
+        }
+        FileLogger.log("Defer USB reopen ${delay}ms (hot-unplug settle)")
+        pendingRefreshDevice = preferDevice
+        pendingRefreshAuto = forceAutoStream
+        fpsHandler.postDelayed(usbRetryRunnable, delay + 50L)
     }
 
     private fun suppressAutoOpen(ms: Long) {
@@ -429,12 +465,16 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     }
 
     override fun onPermissionResult(device: UsbDevice?, granted: Boolean) {
-        if (granted && device != null) {
-            val shouldStart = pendingStartAfterPermission || switchStream.isChecked
+        permissionWaitDeviceName = null
+        val hasIt = device != null && usbManager.hasPermission(device)
+        if ((granted || hasIt) && device != null) {
+            val shouldStart =
+                pendingStartAfterPermission || switchStream.isChecked || resumeStreamOnReattach
             pendingStartAfterPermission = false
             openDeviceAndLoadModes(device, startStream = shouldStart)
         } else {
             pendingStartAfterPermission = false
+            resumeStreamOnReattach = false
             setSwitchChecked(false)
             updateStatus(getString(R.string.status_permission_denied))
         }
@@ -444,7 +484,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         dropdownDevice.setOnItemClickListener { _, _, pos, _ ->
             if (suppressDeviceCallback) return@setOnItemClickListener
             val device = uvcDevices.getOrNull(pos) ?: return@setOnItemClickListener
-            prepareDevice(device, startStream = switchStream.isChecked)
+            prepareDevice(device, startStream = switchStream.isChecked || resumeStreamOnReattach)
         }
         dropdownResolution.setOnItemClickListener { _, _, pos, _ ->
             if (suppressResolutionCallback) return@setOnItemClickListener
@@ -509,7 +549,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         pendingLaunchAutoStart = false
         val wantStart = !session.isStreaming &&
             !isAutoOpenSuppressed() &&
-            (switchStream.isChecked || forceAutoStream || launchAuto)
+            (switchStream.isChecked || forceAutoStream || launchAuto || resumeStreamOnReattach)
 
         if (wantStart) {
             ensureHttpRunning()
@@ -548,12 +588,22 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
 
         if (!usbManager.hasPermission(device)) {
-            pendingStartAfterPermission = startStream
+            pendingStartAfterPermission = startStream || resumeStreamOnReattach
+            if (permissionWaitDeviceName != device.deviceName) {
+                permissionWaitDeviceName = device.deviceName
+                permissionRetryDevice = device
+                permissionRetryStart = pendingStartAfterPermission
+                FileLogger.log("USB permission not ready for ${device.deviceName}, retry 300ms")
+                fpsHandler.removeCallbacks(permissionRetryRunnable)
+                fpsHandler.postDelayed(permissionRetryRunnable, 300L)
+                return
+            }
             FileLogger.log("Requesting USB permission for ${device.productName}")
             usbMonitor.requestPermission(usbManager, device)
             updateStatus(getString(R.string.status_waiting_permission))
             return
         }
+        permissionWaitDeviceName = null
 
         openDeviceAndLoadModes(device, startStream)
     }
@@ -710,6 +760,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
                     attemptFps != fps
             selectModeInUi(attempt, attemptFps)
             rememberSuccess(attempt.width, attempt.height, attemptFps)
+            resumeStreamOnReattach = false
             setSwitchChecked(true)
             updateStatus(
                 if (fallback) {
@@ -760,13 +811,18 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         updateStatus(getString(R.string.status_idle))
     }
 
+    private fun onStreamSwitchChanged(isChecked: Boolean) {
+        FileLogger.log("Switch changed: $isChecked")
+        if (!isChecked) resumeStreamOnReattach = false
+        if (isChecked) startStreaming() else stopStreaming()
+    }
+
     private fun setSwitchChecked(checked: Boolean) {
         if (switchStream.isChecked == checked) return
         switchStream.setOnCheckedChangeListener(null)
         switchStream.isChecked = checked
         switchStream.setOnCheckedChangeListener { _, isChecked ->
-            FileLogger.log("Switch changed: $isChecked")
-            if (isChecked) startStreaming() else stopStreaming()
+            onStreamSwitchChanged(isChecked)
         }
     }
 
@@ -784,6 +840,8 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     override fun onDestroy() {
         super.onDestroy()
         fpsHandler.removeCallbacks(fpsRunnable)
+        fpsHandler.removeCallbacks(usbRetryRunnable)
+        fpsHandler.removeCallbacks(permissionRetryRunnable)
         if (::previewController.isInitialized) {
             previewController.release()
         }
