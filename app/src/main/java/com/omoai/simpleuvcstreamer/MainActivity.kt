@@ -135,6 +135,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         tvHttpState = findViewById(R.id.tvHttpState)
         listAccessUrls = findViewById(R.id.listAccessUrls)
         tvHttpNoUrls = findViewById(R.id.tvHttpNoUrls)
+        findViewById<TextView>(R.id.tvQqGroup).setOnClickListener { copyQqGroup() }
 
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         session = UvcSession(usbManager)
@@ -385,6 +386,13 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("stream", url))
         Toast.makeText(this, R.string.http_copied, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun copyQqGroup() {
+        val number = getString(R.string.qq_group_number)
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("qq", number))
+        Toast.makeText(this, R.string.qq_group_copied, Toast.LENGTH_SHORT).show()
     }
 
     override fun onDeviceAttached() {

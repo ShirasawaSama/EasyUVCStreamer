@@ -181,13 +181,26 @@
                     <ImageView
                         android:id="@+id/imagePreview"
                         android:layout_width="match_parent"
-                        android:layout_height="200dp"
+                        android:layout_height="320dp"
                         android:adjustViewBounds="true"
                         android:contentDescription="@string/preview_content_description"
                         android:scaleType="fitCenter" />
                 </com.google.android.material.card.MaterialCardView>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
+
+        <TextView
+            android:id="@+id/tvQqGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_url_block"
+            android:gravity="center"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="10dp"
+            android:text="@string/qq_group_hint"
+            android:textAppearance="@style/Text.Uvc.Label"
+            android:textColor="@color/text_secondary" />
 
         <!-- HTTP -->
         <com.google.android.material.card.MaterialCardView
