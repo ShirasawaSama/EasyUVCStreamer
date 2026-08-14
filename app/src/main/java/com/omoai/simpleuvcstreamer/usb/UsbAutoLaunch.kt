@@ -34,9 +34,17 @@ object UsbAutoLaunch {
         FileLogger.log("USB auto-launch component enabled=$enabled")
     }
 
-    /** Sync PackageManager with saved preference (call on startup). */
+    /** Sync PackageManager with saved preference (call on startup / when leaving the UI). */
     fun syncFromPrefs(context: Context) {
         applyComponentState(context, isEnabled(context))
+    }
+
+    /**
+     * Hide the system "choose an app for this USB device" sheet while this app is
+     * already in the foreground. In-app BroadcastReceiver still gets attach/detach.
+     */
+    fun suppressSystemChooser(context: Context) {
+        applyComponentState(context, false)
     }
 
     private fun applyComponentState(context: Context, enabled: Boolean) {

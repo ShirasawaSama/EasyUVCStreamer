@@ -216,6 +216,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         switchAutoLaunch.isChecked = UsbAutoLaunch.isEnabled(this)
         switchAutoLaunch.setOnCheckedChangeListener { _, checked ->
             UsbAutoLaunch.setEnabled(this, checked)
+            UsbAutoLaunch.suppressSystemChooser(this)
         }
 
         switchStream.setOnCheckedChangeListener { _, isChecked ->
@@ -224,6 +225,20 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
         ensureRuntimePermissionsThenStartUsb()
         fpsHandler.post(fpsRunnable)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::usbManager.isInitialized) {
+            UsbAutoLaunch.suppressSystemChooser(this)
+        }
+    }
+
+    override fun onPause() {
+        if (::usbManager.isInitialized) {
+            UsbAutoLaunch.syncFromPrefs(this)
+        }
+        super.onPause()
     }
 
     private fun ensureRuntimePermissionsThenStartUsb() {
@@ -261,6 +276,10 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         val device = readUsbDeviceExtra(intent) ?: return
         FileLogger.log("USB attach intent: ${device.deviceName} ${device.productName}")
         if (!::session.isInitialized || !UvcNative.isLibLoaded) return
+        if (session.isStreaming) {
+            FileLogger.log("USB attach intent while already streaming — ignore chooser relaunch")
+            return
+        }
         val wantStream = autoStart &&
             !session.isStreaming &&
             (resumeStreamOnReattach || AutoStartPrefs.isEnabled(this))
@@ -558,6 +577,10 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             ensureHttpRunning()
         }
 
+        if (session.isStreaming) {
+            return
+        }
+
         prepareDevice(selected ?: uvcDevices.first(), startStream = wantStart)
     }
 
@@ -583,9 +606,8 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
     private fun prepareDevice(device: UsbDevice, startStream: Boolean) {
         if (UvcDeviceFinder.sameDevice(device, session.currentDevice) && session.isDeviceOpen) {
-            when {
-                startStream && !session.isStreaming -> applySelectedMode()
-                !startStream && session.isStreaming -> stopStreaming()
+            if (startStream && !session.isStreaming) {
+                applySelectedMode()
             }
             return
         }
@@ -815,6 +837,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         session.stopStream()
         tvFps.visibility = View.GONE
         updateStatus(getString(R.string.status_idle))
+        setSwitchChecked(false)
     }
 
     private fun onStreamSwitchChanged(isChecked: Boolean) {
