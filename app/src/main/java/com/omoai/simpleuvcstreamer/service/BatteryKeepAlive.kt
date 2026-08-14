@@ -14,6 +14,12 @@ object BatteryKeepAlive {
         return pm.isIgnoringBatteryOptimizations(context.packageName)
     }
 
+    fun requestExemptionIntent(context: Context): Intent {
+        return Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:${context.packageName}")
+        }
+    }
+
     fun openExemptionUi(activity: Activity) {
         val pkg = activity.packageName
         try {

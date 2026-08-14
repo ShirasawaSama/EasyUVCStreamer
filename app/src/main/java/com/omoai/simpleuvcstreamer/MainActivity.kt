@@ -28,11 +28,13 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.omoai.simpleuvcstreamer.preview.FramePreviewController
 import com.omoai.simpleuvcstreamer.service.BatteryKeepAlive
+import com.omoai.simpleuvcstreamer.service.CaptureKeepAlive
 import com.omoai.simpleuvcstreamer.service.CaptureService
 import com.omoai.simpleuvcstreamer.stream.HttpStreamController
 import com.omoai.simpleuvcstreamer.stream.NetworkAddresses
@@ -41,6 +43,7 @@ import com.omoai.simpleuvcstreamer.usb.UsbAutoLaunch
 import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
 import com.omoai.simpleuvcstreamer.util.AppPermissions
 import com.omoai.simpleuvcstreamer.util.FileLogger
+import com.omoai.simpleuvcstreamer.util.PermissionRationale
 import com.omoai.simpleuvcstreamer.uvc.AutoStartPrefs
 import com.omoai.simpleuvcstreamer.uvc.StreamMode
 import com.omoai.simpleuvcstreamer.uvc.UvcNative
@@ -84,6 +87,11 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
     private var lastDeviceSig: String = ""
     private var lastModeSig: String = ""
     private var uiResumed = false
+    private var permissionDialogShowing = false
+    private var keepAlivePromptedThisSession = false
+    private var batterySkippedThisSession = false
+    private var pendingBatteryAfterPerms = false
+    private var pendingAfterKeepAlive: (() -> Unit)? = null
 
     private val runtimePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -92,6 +100,14 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
             if (denied.isNotEmpty()) {
                 FileLogger.log("Permissions denied: $denied (MJPEG video can still work)")
             }
+            continueKeepAliveAfterPermissions()
+        }
+
+    private val batteryExemptionLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            FileLogger.log("Battery exemption back, exempt=${BatteryKeepAlive.isExempt(this)}")
+            syncBatterySwitch()
+            finishKeepAliveChain()
         }
 
     private val fpsHandler = Handler(Looper.getMainLooper())
@@ -119,6 +135,7 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
                 service.onUsbAttachIntent(it)
             }
             FileLogger.log("CaptureService connected")
+            maybePromptKeepAlive()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -212,7 +229,6 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
         }
 
         bindDropdowns()
-        ensureRuntimePermissions()
         handleUsbAttachIntent(intent)
         fpsHandler.post(fpsRunnable)
     }
@@ -255,11 +271,102 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
         bindService(intent, connection, Context.BIND_AUTO_CREATE)
     }
 
-    private fun ensureRuntimePermissions() {
+    private fun maybePromptKeepAlive() {
+        if (keepAlivePromptedThisSession) return
+        val service = capture ?: return
+        val wantsKeepAlive = AutoStartPrefs.isEnabled(this) ||
+            service.isStreaming ||
+            CaptureKeepAlive.wantStreaming(this)
+        if (!wantsKeepAlive) return
+        if (AppPermissions.missing(this).isEmpty() &&
+            (BatteryKeepAlive.isExempt(this) || batterySkippedThisSession)
+        ) {
+            return
+        }
+        keepAlivePromptedThisSession = true
+        ensureKeepAliveThen { }
+    }
+
+    private fun ensureKeepAliveThen(after: () -> Unit) {
         val missing = AppPermissions.missing(this)
-        if (missing.isEmpty()) return
-        FileLogger.log("Requesting permissions: ${missing.toList()}")
-        runtimePermissionLauncher.launch(missing)
+        val needBattery = !BatteryKeepAlive.isExempt(this) && !batterySkippedThisSession
+        if (missing.isEmpty() && !needBattery) {
+            after()
+            return
+        }
+        pendingAfterKeepAlive = after
+        showKeepAliveRationale(missing, needBattery)
+    }
+
+    private fun showKeepAliveRationale(missing: Array<String>, needBattery: Boolean) {
+        if (permissionDialogShowing) return
+        permissionDialogShowing = true
+        val goSettings = missing.isNotEmpty() && AppPermissions.anyPermanentlyDenied(this, missing)
+        val title = if (goSettings) R.string.perm_dialog_denied_title else R.string.perm_dialog_title
+        val message = if (goSettings) {
+            getString(R.string.perm_dialog_denied_body)
+        } else {
+            PermissionRationale.message(this, missing.toList(), needBattery)
+        }
+        val positive = if (goSettings) R.string.perm_dialog_settings else R.string.perm_dialog_allow
+        MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton(positive) { _, _ ->
+                permissionDialogShowing = false
+                if (goSettings) {
+                    AppPermissions.openAppSettings(this)
+                    if (needBattery) requestBatteryExemption() else finishKeepAliveChain()
+                } else if (missing.isNotEmpty()) {
+                    FileLogger.log("Requesting permissions after rationale: ${missing.toList()}")
+                    AppPermissions.markAskedSystemPrompt(this)
+                    pendingBatteryAfterPerms = needBattery
+                    runtimePermissionLauncher.launch(missing)
+                } else {
+                    requestBatteryExemption()
+                }
+            }
+            .setNegativeButton(R.string.perm_dialog_later) { _, _ ->
+                permissionDialogShowing = false
+                if (needBattery) batterySkippedThisSession = true
+                FileLogger.log("Keep-alive prompts skipped by user")
+                finishKeepAliveChain()
+            }
+            .setOnCancelListener {
+                permissionDialogShowing = false
+                if (needBattery) batterySkippedThisSession = true
+                finishKeepAliveChain()
+            }
+            .show()
+    }
+
+    private fun continueKeepAliveAfterPermissions() {
+        val needBattery = pendingBatteryAfterPerms &&
+            !BatteryKeepAlive.isExempt(this) &&
+            !batterySkippedThisSession
+        pendingBatteryAfterPerms = false
+        if (needBattery) {
+            requestBatteryExemption()
+        } else {
+            finishKeepAliveChain()
+        }
+    }
+
+    private fun requestBatteryExemption() {
+        try {
+            batteryExemptionLauncher.launch(BatteryKeepAlive.requestExemptionIntent(this))
+        } catch (t: Throwable) {
+            FileLogger.log("Battery exemption launcher: ${t.message}")
+            BatteryKeepAlive.openExemptionUi(this)
+            finishKeepAliveChain()
+        }
+    }
+
+    private fun finishKeepAliveChain() {
+        val next = pendingAfterKeepAlive
+        pendingAfterKeepAlive = null
+        pendingBatteryAfterPerms = false
+        next?.invoke()
     }
 
     private fun handleUsbAttachIntent(intent: Intent?) {
@@ -537,14 +644,18 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
 
     private fun onStreamSwitchChanged(isChecked: Boolean) {
         FileLogger.log("Switch changed: $isChecked")
-        val service = capture ?: return
         if (isChecked) {
-            val label = dropdownDevice.text?.toString()
-            val device = service.uvcDevices.firstOrNull { UvcDeviceFinder.labelFor(it) == label }
-            service.startCapture(device)
+            ensureKeepAliveThen { startCaptureFromUi() }
         } else {
-            service.stopCapture(userInitiated = true)
+            capture?.stopCapture(userInitiated = true)
         }
+    }
+
+    private fun startCaptureFromUi() {
+        val service = capture ?: return
+        val label = dropdownDevice.text?.toString()
+        val device = service.uvcDevices.firstOrNull { UvcDeviceFinder.labelFor(it) == label }
+        service.startCapture(device)
     }
 
     private fun setSwitchChecked(checked: Boolean) {
