@@ -3,6 +3,7 @@ package com.omoai.simpleuvcstreamer.util
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.content.ContextCompat
 
 /**
@@ -13,13 +14,19 @@ import androidx.core.content.ContextCompat
  * that warning and unlock future USB audio.
  */
 object AppPermissions {
-    val REQUIRED: Array<String> = arrayOf(
-        Manifest.permission.CAMERA,
-        Manifest.permission.RECORD_AUDIO,
-    )
+    fun required(): Array<String> {
+        val list = mutableListOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO,
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            list.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        return list.toTypedArray()
+    }
 
     fun missing(context: Context): Array<String> =
-        REQUIRED.filter {
+        required().filter {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
 

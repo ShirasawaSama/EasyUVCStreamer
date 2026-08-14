@@ -161,6 +161,21 @@
                     android:textAppearance="@style/Text.Uvc.Body" />
 
                 <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchBattery"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/switch_battery_keep_alive"
+                    android:textAppearance="@style/Text.Uvc.Body" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="@string/switch_battery_keep_alive_hint"
+                    android:textAppearance="@style/Text.Uvc.Label" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/switchPreview"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

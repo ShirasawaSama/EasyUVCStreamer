@@ -14,6 +14,8 @@
     <string name="switch_stream">开始采集</string>
     <string name="switch_auto_start">启动时自动采集并开推流服务</string>
     <string name="switch_auto_launch">插入摄像头时自动打开应用</string>
+    <string name="switch_battery_keep_alive">忽略电池优化（锁屏后继续推流）</string>
+    <string name="switch_battery_keep_alive_hint">vivo / 小米等请再到系统设置里允许后台运行并锁定任务</string>
     <string name="switch_preview">本机预览（费电，默认关）</string>
 
     <string name="http_port_hint">端口</string>
@@ -59,4 +61,10 @@
     <string name="qq_group_hint">添加 QQ 群 1103232382 获取最新更新</string>
     <string name="qq_group_copied">已复制群号 1103232382</string>
     <string name="qq_group_number">1103232382</string>
+
+    <string name="notify_channel_name">USB 采集</string>
+    <string name="notify_channel_desc">采集运行时显示，避免系统休眠打断推流</string>
+    <string name="notify_waiting">正在启动采集…</string>
+    <string name="notify_waiting_reconnect">摄像头已断开 · 等待重新连接</string>
+    <string name="notify_stop">停止采集</string>
 </resources>

@@ -2,13 +2,16 @@ package com.omoai.simpleuvcstreamer
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
@@ -29,35 +32,31 @@ import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.omoai.simpleuvcstreamer.preview.FramePreviewController
+import com.omoai.simpleuvcstreamer.service.BatteryKeepAlive
+import com.omoai.simpleuvcstreamer.service.CaptureService
 import com.omoai.simpleuvcstreamer.stream.HttpStreamController
 import com.omoai.simpleuvcstreamer.stream.NetworkAddresses
 import com.omoai.simpleuvcstreamer.ui.SafeArea
 import com.omoai.simpleuvcstreamer.usb.UsbAutoLaunch
-import com.omoai.simpleuvcstreamer.usb.UsbDeviceMonitor
 import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
 import com.omoai.simpleuvcstreamer.util.AppPermissions
 import com.omoai.simpleuvcstreamer.util.FileLogger
 import com.omoai.simpleuvcstreamer.uvc.AutoStartPrefs
-import com.omoai.simpleuvcstreamer.uvc.DeviceHistory
 import com.omoai.simpleuvcstreamer.uvc.StreamMode
 import com.omoai.simpleuvcstreamer.uvc.UvcNative
-import com.omoai.simpleuvcstreamer.uvc.UvcSession
 
 /**
- * Thin UI layer. Streaming main-line is raw MJPEG via [UvcSession] + HTTP push.
- * Preview is opt-in and off by default (decode only when enabled).
+ * UI only. USB capture and HTTP live in [CaptureService] so leaving this
+ * screen does not tear down an active stream.
  */
-class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
-
-    companion object {
-        private const val ACTION_USB_PERMISSION = "com.omoai.simpleuvcstreamer.USB_PERMISSION"
-    }
+class MainActivity : AppCompatActivity(), CaptureService.Listener {
 
     private lateinit var tvStatus: TextView
     private lateinit var tvFps: TextView
     private lateinit var switchStream: MaterialSwitch
     private lateinit var switchAutoStart: MaterialSwitch
     private lateinit var switchAutoLaunch: MaterialSwitch
+    private lateinit var switchBattery: MaterialSwitch
     private lateinit var switchPreview: MaterialSwitch
     private lateinit var previewContainer: MaterialCardView
     private lateinit var dropdownDevice: AutoCompleteTextView
@@ -72,32 +71,19 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private lateinit var listAccessUrls: LinearLayout
     private lateinit var tvHttpNoUrls: TextView
 
-    private lateinit var usbManager: UsbManager
-    private lateinit var session: UvcSession
-    private lateinit var usbMonitor: UsbDeviceMonitor
     private lateinit var previewController: FramePreviewController
-    private lateinit var httpStream: HttpStreamController
 
-    private var uvcDevices: List<UsbDevice> = emptyList()
-    private var streamModes: List<StreamMode> = emptyList()
+    private var capture: CaptureService? = null
+    private var bound = false
+    private var pendingAttachDevice: UsbDevice? = null
     private var suppressDeviceCallback = false
     private var suppressResolutionCallback = false
     private var suppressFpsCallback = false
-    private var pendingStartAfterPermission = false
     private var lastAccessSignature: String = ""
-    /** Consume once: auto-start stream after app launch when [AutoStartPrefs] is on. */
-    private var pendingLaunchAutoStart = false
-    /** After hot-unplug, suppress auto reopen briefly so bump/reconnect can settle. */
-    private var suppressAutoOpenUntilMs: Long = 0L
-    /** Capture was on when the cable came out — resume after the same camera returns. */
-    private var resumeStreamOnReattach = false
-    private var permissionWaitDeviceName: String? = null
-    private var pendingRefreshDevice: UsbDevice? = null
-    private var pendingRefreshAuto = false
-    private var permissionRetryDevice: UsbDevice? = null
-    private var permissionRetryStart = false
-
     private var lastHttpStateText: String = ""
+    private var lastDeviceSig: String = ""
+    private var lastModeSig: String = ""
+    private var uiResumed = false
 
     private val runtimePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -106,13 +92,13 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             if (denied.isNotEmpty()) {
                 FileLogger.log("Permissions denied: $denied (MJPEG video can still work)")
             }
-            startUsbSession()
         }
 
     private val fpsHandler = Handler(Looper.getMainLooper())
     private val fpsRunnable = object : Runnable {
         override fun run() {
-            if (session.isStreaming && UvcNative.isLibLoaded) {
+            val session = capture
+            if (session != null && session.isStreaming && UvcNative.isLibLoaded) {
                 updateFpsText(session.frameCountPerSecond())
             } else if (::tvFps.isInitialized) {
                 tvFps.visibility = View.GONE
@@ -121,15 +107,26 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             fpsHandler.postDelayed(this, 1000)
         }
     }
-    private val usbRetryRunnable = Runnable {
-        refreshDeviceList(
-            preferDevice = pendingRefreshDevice,
-            forceAutoStream = pendingRefreshAuto || shouldResumeStream(),
-        )
-    }
-    private val permissionRetryRunnable = Runnable {
-        val device = permissionRetryDevice ?: return@Runnable
-        prepareDevice(device, startStream = permissionRetryStart || shouldResumeStream())
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val service = (binder as CaptureService.LocalBinder).service()
+            capture = service
+            bound = true
+            service.addListener(this@MainActivity)
+            pendingAttachDevice?.let {
+                pendingAttachDevice = null
+                service.onUsbAttachIntent(it)
+            }
+            FileLogger.log("CaptureService connected")
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            capture?.removeListener(this@MainActivity)
+            capture = null
+            bound = false
+            FileLogger.log("CaptureService disconnected")
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -144,6 +141,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         switchStream = findViewById(R.id.switchStream)
         switchAutoStart = findViewById(R.id.switchAutoStart)
         switchAutoLaunch = findViewById(R.id.switchAutoLaunch)
+        switchBattery = findViewById(R.id.switchBattery)
         switchPreview = findViewById(R.id.switchPreview)
         previewContainer = findViewById(R.id.previewContainer)
         dropdownDevice = findViewById(R.id.dropdownDevice)
@@ -161,42 +159,20 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         tvHttpNoUrls = findViewById(R.id.tvHttpNoUrls)
         findViewById<TextView>(R.id.tvQqGroup).setOnClickListener { copyQqGroup() }
 
-        usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
-        session = UvcSession(usbManager)
-        previewController = FramePreviewController(imagePreview) { session.isStreaming }
-        httpStream = HttpStreamController(this)
+        previewController = FramePreviewController(imagePreview) {
+            capture?.isStreaming == true
+        }
 
         if (!UvcNative.isLibLoaded) {
             updateStatus(getString(R.string.status_lib_missing))
             FileLogger.log("FATAL: Library not loaded")
-            refreshHttpUi(forceList = true)
-            return
         }
 
-        try {
-            val res = UvcNative.nativeInit()
-            FileLogger.log("nativeInit result: $res")
-            updateStatus(getString(R.string.status_ready))
-        } catch (t: Throwable) {
-            FileLogger.log("nativeInit CRASHED: ${t.message}")
-            updateStatus(getString(R.string.status_init_crash))
-            refreshHttpUi(forceList = true)
-            return
-        }
-
-        editHttpPort.setText(httpStream.port.toString())
         switchAutoStart.isChecked = AutoStartPrefs.isEnabled(this)
-        if (switchAutoStart.isChecked) {
-            pendingLaunchAutoStart = true
-            val httpOk = httpStream.ensureStarted()
-            FileLogger.log("HTTP auto-start ok=$httpOk port=${httpStream.port}")
-        } else {
-            FileLogger.log("HTTP auto-start skipped (option off)")
-        }
         switchAutoStart.setOnCheckedChangeListener { _, checked ->
             AutoStartPrefs.setEnabled(this, checked)
-            if (checked && !httpStream.isRunning) {
-                httpStream.ensureStarted()
+            if (checked) {
+                capture?.ensureHttpRunning()
                 refreshHttpUi(forceList = true)
             }
         }
@@ -209,7 +185,6 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
                 false
             }
         }
-        refreshHttpUi(forceList = true)
 
         switchPreview.isChecked = false
         previewContainer.visibility = View.GONE
@@ -226,71 +201,77 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             UsbAutoLaunch.suppressSystemChooser(this)
         }
 
+        switchBattery.setOnCheckedChangeListener { _, checked ->
+            if (checked == BatteryKeepAlive.isExempt(this)) return@setOnCheckedChangeListener
+            BatteryKeepAlive.openExemptionUi(this)
+            fpsHandler.post { syncBatterySwitch() }
+        }
+
         switchStream.setOnCheckedChangeListener { _, isChecked ->
             onStreamSwitchChanged(isChecked)
         }
 
-        ensureRuntimePermissionsThenStartUsb()
+        bindDropdowns()
+        ensureRuntimePermissions()
+        handleUsbAttachIntent(intent)
         fpsHandler.post(fpsRunnable)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (!bound) bindCaptureService()
     }
 
     override fun onResume() {
         super.onResume()
-        if (::usbManager.isInitialized) {
-            UsbAutoLaunch.suppressSystemChooser(this)
+        uiResumed = true
+        UsbAutoLaunch.suppressSystemChooser(this)
+        syncBatterySwitch()
+        if (switchPreview.isChecked) {
+            previewController.setEnabled(true)
+            previewController.syncNative()
         }
     }
 
     override fun onPause() {
-        if (::usbManager.isInitialized) {
-            UsbAutoLaunch.syncFromPrefs(this)
-        }
+        uiResumed = false
+        previewController.setEnabled(false)
+        UsbAutoLaunch.syncFromPrefs(this)
         super.onPause()
-    }
-
-    private fun ensureRuntimePermissionsThenStartUsb() {
-        val missing = AppPermissions.missing(this)
-        if (missing.isEmpty()) {
-            startUsbSession()
-            return
-        }
-        FileLogger.log("Requesting permissions: ${missing.toList()}")
-        runtimePermissionLauncher.launch(missing)
-    }
-
-    private fun startUsbSession() {
-        if (!::usbMonitor.isInitialized) {
-            usbMonitor = UsbDeviceMonitor(this, ACTION_USB_PERMISSION, this)
-            usbMonitor.register()
-        }
-        bindDropdowns()
-        refreshDeviceList()
-        handleUsbAttachIntent(intent, autoStart = true)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleUsbAttachIntent(intent, autoStart = true)
+        handleUsbAttachIntent(intent)
     }
 
-    /**
-     * Launched by the system when a filtered UVC device is plugged in.
-     * In that path USB permission is usually already granted.
-     */
-    private fun handleUsbAttachIntent(intent: Intent?, autoStart: Boolean) {
+    override fun onCaptureStateChanged() {
+        runOnUiThread { renderCaptureState() }
+    }
+
+    private fun bindCaptureService() {
+        val intent = Intent(this, CaptureService::class.java)
+        bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    }
+
+    private fun ensureRuntimePermissions() {
+        val missing = AppPermissions.missing(this)
+        if (missing.isEmpty()) return
+        FileLogger.log("Requesting permissions: ${missing.toList()}")
+        runtimePermissionLauncher.launch(missing)
+    }
+
+    private fun handleUsbAttachIntent(intent: Intent?) {
         if (intent?.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
         val device = readUsbDeviceExtra(intent) ?: return
         FileLogger.log("USB attach intent: ${device.deviceName} ${device.productName}")
-        if (!::session.isInitialized || !UvcNative.isLibLoaded) return
-        if (session.isStreaming) {
-            FileLogger.log("USB attach intent while already streaming — ignore chooser relaunch")
+        val service = capture
+        if (service == null) {
+            pendingAttachDevice = device
             return
         }
-        val wantStream = autoStart &&
-            !session.isStreaming &&
-            (resumeStreamOnReattach || AutoStartPrefs.isEnabled(this))
-        scheduleDeviceRefresh(preferDevice = device, forceAutoStream = wantStream)
+        service.onUsbAttachIntent(device)
     }
 
     private fun readUsbDeviceExtra(intent: Intent): UsbDevice? {
@@ -302,17 +283,132 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         }
     }
 
+    private fun renderCaptureState() {
+        val service = capture ?: return
+        updateStatus(service.statusText)
+        setSwitchChecked(service.isStreaming)
+        bindDeviceDropdown(service.uvcDevices, service.currentDevice ?: service.uvcDevices.firstOrNull())
+        bindModeDropdowns(service.streamModes, service.selectedMode, service.selectedFps)
+        if (!editHttpPort.isFocused) {
+            val port = if (service.http.isRunning) {
+                UvcNative.nativeGetHttpServerPort()
+            } else {
+                service.http.port
+            }
+            val shown = editHttpPort.text?.toString().orEmpty()
+            if (shown != port.toString()) {
+                editHttpPort.setText(port.toString())
+            }
+        }
+        refreshHttpUi(forceList = false)
+        if (!service.isDeviceOpen) {
+            previewController.clearFrame()
+        } else if (service.isStreaming && switchPreview.isChecked && uiResumed) {
+            previewController.syncNative()
+        }
+    }
+
+    private fun bindDropdowns() {
+        dropdownDevice.setOnItemClickListener { _, _, pos, _ ->
+            if (suppressDeviceCallback) return@setOnItemClickListener
+            val service = capture ?: return@setOnItemClickListener
+            val device = service.uvcDevices.getOrNull(pos) ?: return@setOnItemClickListener
+            service.selectDevice(device)
+        }
+        dropdownResolution.setOnItemClickListener { _, _, pos, _ ->
+            if (suppressResolutionCallback) return@setOnItemClickListener
+            val mode = capture?.streamModes?.getOrNull(pos) ?: return@setOnItemClickListener
+            capture?.setResolution(mode)
+        }
+        dropdownFps.setOnItemClickListener { _, _, _, _ ->
+            if (suppressFpsCallback) return@setOnItemClickListener
+            val fps = StreamMode.parseFpsLabel(dropdownFps.text?.toString().orEmpty()) ?: return@setOnItemClickListener
+            capture?.setFps(fps)
+        }
+    }
+
+    private fun bindDeviceDropdown(devices: List<UsbDevice>, selected: UsbDevice?) {
+        val sig = devices.joinToString("|") { it.deviceName } + "#" + (selected?.deviceName ?: "")
+        if (sig == lastDeviceSig) return
+        lastDeviceSig = sig
+        val labels = devices.map { UvcDeviceFinder.labelFor(it) }
+        val selectedIndex = selected?.let { sel ->
+            devices.indexOfFirst { it.deviceName == sel.deviceName }
+        }?.takeIf { it >= 0 } ?: 0
+        suppressDeviceCallback = true
+        dropdownDevice.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
+        if (labels.isNotEmpty()) {
+            dropdownDevice.setText(labels[selectedIndex.coerceAtMost(labels.lastIndex)], false)
+        } else {
+            dropdownDevice.setText("", false)
+        }
+        suppressDeviceCallback = false
+    }
+
+    private fun bindModeDropdowns(modes: List<StreamMode>, selected: StreamMode?, fps: Int) {
+        val sig = modes.joinToString("|") { it.sizeLabel } + "#" + (selected?.sizeLabel ?: "") + "@$fps"
+        if (sig == lastModeSig) return
+        lastModeSig = sig
+        val labels = modes.map { it.sizeLabel }
+        suppressResolutionCallback = true
+        dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
+        if (selected != null && modes.isNotEmpty()) {
+            dropdownResolution.setText(selected.sizeLabel, false)
+            setDropdownEnabled(layoutResolution, dropdownResolution, modes.size > 1)
+            bindFpsDropdown(selected, fps)
+        } else {
+            dropdownResolution.setText("", false)
+            setDropdownEnabled(layoutResolution, dropdownResolution, enabled = false)
+            clearFpsDropdown()
+        }
+        suppressResolutionCallback = false
+    }
+
+    private fun bindFpsDropdown(mode: StreamMode, preferFps: Int) {
+        val labels = mode.fpsLabels()
+        val selectedFps = mode.nearestFps(preferFps)
+        suppressFpsCallback = true
+        dropdownFps.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
+        dropdownFps.setText("$selectedFps fps", false)
+        setDropdownEnabled(layoutFps, dropdownFps, labels.size > 1)
+        suppressFpsCallback = false
+    }
+
+    private fun clearFpsDropdown() {
+        suppressFpsCallback = true
+        dropdownFps.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, emptyList<String>()))
+        dropdownFps.setText("", false)
+        setDropdownEnabled(layoutFps, dropdownFps, enabled = false)
+        suppressFpsCallback = false
+    }
+
+    private fun setDropdownEnabled(
+        layout: TextInputLayout,
+        dropdown: AutoCompleteTextView,
+        enabled: Boolean,
+    ) {
+        layout.isEnabled = enabled
+        dropdown.isEnabled = enabled
+        dropdown.isClickable = enabled
+        layout.endIconMode = if (enabled) {
+            TextInputLayout.END_ICON_DROPDOWN_MENU
+        } else {
+            TextInputLayout.END_ICON_NONE
+        }
+    }
+
     private fun applyHttpPortFromUi() {
+        val service = capture ?: return
         val raw = editHttpPort.text?.toString()?.trim().orEmpty()
         val p = raw.toIntOrNull()
         if (p == null || p !in 1..65535) {
             updateStatus(getString(R.string.status_bad_port))
-            editHttpPort.setText(httpStream.port.toString())
+            editHttpPort.setText(service.http.port.toString())
             refreshHttpUi()
             return
         }
-        val ok = httpStream.applyPort(p)
-        editHttpPort.setText(httpStream.port.toString())
+        val ok = service.applyHttpPort(p)
+        editHttpPort.setText(service.http.port.toString())
         updateStatus(
             if (ok) getString(R.string.status_http_ok, p)
             else getString(R.string.status_http_fail, p)
@@ -324,16 +420,19 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
 
     private fun refreshHttpUi(forceList: Boolean = false) {
         runOnUiThread {
-            if (!::httpStream.isInitialized) return@runOnUiThread
-            val running = httpStream.isRunning
-            val port = if (running) UvcNative.nativeGetHttpServerPort() else httpStream.port
-            val clients = httpStream.clientCount
+            val http = capture?.http
+            val running = http?.isRunning == true
+            val port = when {
+                http == null -> HttpStreamController.DEFAULT_PORT
+                running -> UvcNative.nativeGetHttpServerPort()
+                else -> http.port
+            }
+            val clients = http?.clientCount ?: 0
             val state = if (running) {
                 getString(R.string.http_running, port, clients)
             } else {
                 getString(R.string.http_stopped, port)
             }
-            // Avoid setText when unchanged — prevents layout/focus scroll fights.
             if (state != lastHttpStateText) {
                 lastHttpStateText = state
                 tvHttpState.text = state
@@ -341,7 +440,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             if (forceList) {
                 lastAccessSignature = ""
             }
-            renderAccessList(httpStream.accessEndpoints())
+            renderAccessList(http?.accessEndpoints().orEmpty())
         }
     }
 
@@ -436,441 +535,16 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         Toast.makeText(this, R.string.qq_group_copied, Toast.LENGTH_SHORT).show()
     }
 
-    override fun onDeviceAttached(device: UsbDevice?) {
-        if (session.isStreaming) {
-            refreshDeviceList()
-            return
-        }
-        val auto = shouldResumeStream()
-        scheduleDeviceRefresh(preferDevice = device, forceAutoStream = auto)
-    }
-
-    override fun onDeviceDetached(device: UsbDevice) {
-        if (UvcDeviceFinder.sameDevice(device, session.currentDevice)) {
-            FileLogger.log("Current UVC device detached — stopping cleanly")
-            resumeStreamOnReattach = session.isStreaming || switchStream.isChecked
-            // Turn off stream switch first so refreshDeviceList will not reopen immediately.
-            setSwitchChecked(false)
-            if (::previewController.isInitialized) {
-                previewController.clearFrame()
-            }
-            suppressAutoOpen(2500L)
-            pendingStartAfterPermission = false
-            pendingLaunchAutoStart = false
-            permissionWaitDeviceName = null
-            fpsHandler.removeCallbacks(usbRetryRunnable)
-            fpsHandler.removeCallbacks(permissionRetryRunnable)
-            runCatching { session.close() }
-                .onFailure { FileLogger.log("session.close on detach: ${it.message}") }
-            clearModes()
-            updateStatus(getString(R.string.status_device_detached))
-        }
-        refreshDeviceList()
-    }
-
-    private fun shouldResumeStream(): Boolean {
-        return resumeStreamOnReattach || AutoStartPrefs.isEnabled(this)
-    }
-
-    private fun scheduleDeviceRefresh(preferDevice: UsbDevice?, forceAutoStream: Boolean) {
-        fpsHandler.removeCallbacks(usbRetryRunnable)
-        val delay = (suppressAutoOpenUntilMs - System.currentTimeMillis()).coerceAtLeast(0L)
-        if (delay == 0L) {
-            refreshDeviceList(preferDevice = preferDevice, forceAutoStream = forceAutoStream)
-            return
-        }
-        FileLogger.log("Defer USB reopen ${delay}ms (hot-unplug settle)")
-        pendingRefreshDevice = preferDevice
-        pendingRefreshAuto = forceAutoStream
-        fpsHandler.postDelayed(usbRetryRunnable, delay + 50L)
-    }
-
-    private fun suppressAutoOpen(ms: Long) {
-        suppressAutoOpenUntilMs = System.currentTimeMillis() + ms
-    }
-
-    private fun isAutoOpenSuppressed(): Boolean {
-        return System.currentTimeMillis() < suppressAutoOpenUntilMs
-    }
-
-    override fun onPermissionResult(device: UsbDevice?, granted: Boolean) {
-        permissionWaitDeviceName = null
-        val hasIt = device != null && usbManager.hasPermission(device)
-        if ((granted || hasIt) && device != null) {
-            val shouldStart =
-                pendingStartAfterPermission || switchStream.isChecked || resumeStreamOnReattach
-            pendingStartAfterPermission = false
-            openDeviceAndLoadModes(device, startStream = shouldStart)
-        } else {
-            pendingStartAfterPermission = false
-            resumeStreamOnReattach = false
-            setSwitchChecked(false)
-            updateStatus(getString(R.string.status_permission_denied))
-        }
-    }
-
-    private fun bindDropdowns() {
-        dropdownDevice.setOnItemClickListener { _, _, pos, _ ->
-            if (suppressDeviceCallback) return@setOnItemClickListener
-            val device = uvcDevices.getOrNull(pos) ?: return@setOnItemClickListener
-            prepareDevice(device, startStream = switchStream.isChecked || resumeStreamOnReattach)
-        }
-        dropdownResolution.setOnItemClickListener { _, _, pos, _ ->
-            if (suppressResolutionCallback) return@setOnItemClickListener
-            val mode = streamModes.getOrNull(pos) ?: return@setOnItemClickListener
-            bindFpsDropdown(mode, preferFps = mode.defaultFps)
-            if (session.isStreaming) {
-                applySelectedMode()
-            }
-        }
-        dropdownFps.setOnItemClickListener { _, _, _, _ ->
-            if (suppressFpsCallback) return@setOnItemClickListener
-            if (session.isStreaming) {
-                applySelectedMode()
-            }
-        }
-    }
-
-    private fun refreshDeviceList(
-        preferDevice: UsbDevice? = null,
-        forceAutoStream: Boolean = false,
-    ) {
-        val previous = uvcDevices
-        uvcDevices = UvcDeviceFinder.listUvcDevices(usbManager)
-        FileLogger.log("UVC Device count: ${uvcDevices.size}")
-
-        // Newly appeared devices count as "just connected" for history ranking.
-        for (device in uvcDevices) {
-            val isNew = previous.none { it.deviceName == device.deviceName }
-            if (isNew) {
-                DeviceHistory.touch(this, device)
-            }
-        }
-        preferDevice?.let { preferred ->
-            uvcDevices.firstOrNull { it.deviceName == preferred.deviceName }
-                ?.let { DeviceHistory.touch(this, it) }
-        }
-
-        val selected = pickDeviceForUi()
-        val labels = uvcDevices.map { UvcDeviceFinder.labelFor(it) }
-        val selectedIndex = selected?.let { sel ->
-            uvcDevices.indexOfFirst { it.deviceName == sel.deviceName }
-        }?.takeIf { it >= 0 } ?: 0
-
-        suppressDeviceCallback = true
-        dropdownDevice.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
-        if (labels.isNotEmpty()) {
-            dropdownDevice.setText(labels[selectedIndex], false)
-        } else {
-            dropdownDevice.setText("", false)
-        }
-        suppressDeviceCallback = false
-
-        if (uvcDevices.isEmpty()) {
-            pendingLaunchAutoStart = false
-            session.close()
-            clearModes()
-            updateStatus(getString(R.string.status_no_device))
-            return
-        }
-
-        val launchAuto = pendingLaunchAutoStart && AutoStartPrefs.isEnabled(this)
-        pendingLaunchAutoStart = false
-        val wantStart = !session.isStreaming &&
-            !isAutoOpenSuppressed() &&
-            (switchStream.isChecked || forceAutoStream || launchAuto || resumeStreamOnReattach)
-
-        if (wantStart) {
-            ensureHttpRunning()
-        }
-
-        if (session.isStreaming) {
-            return
-        }
-
-        prepareDevice(selected ?: uvcDevices.first(), startStream = wantStart)
-    }
-
-    /**
-     * While streaming, keep the current device if still plugged.
-     * Otherwise prefer the most recently used model among connected devices.
-     */
-    private fun pickDeviceForUi(): UsbDevice? {
-        if (uvcDevices.isEmpty()) return null
-        if (session.isStreaming) {
-            val current = session.currentDevice
-            uvcDevices.firstOrNull { UvcDeviceFinder.sameDevice(it, current) }?.let { return it }
-        }
-        return DeviceHistory.pickPreferred(this, uvcDevices) ?: uvcDevices.first()
-    }
-
-    private fun ensureHttpRunning() {
-        if (httpStream.isRunning) return
-        val ok = httpStream.ensureStarted()
-        FileLogger.log("HTTP ensureStarted ok=$ok port=${httpStream.port}")
-        refreshHttpUi(forceList = true)
-    }
-
-    private fun prepareDevice(device: UsbDevice, startStream: Boolean) {
-        if (UvcDeviceFinder.sameDevice(device, session.currentDevice) && session.isDeviceOpen) {
-            if (startStream && !session.isStreaming) {
-                applySelectedMode()
-            }
-            return
-        }
-
-        if (!usbManager.hasPermission(device)) {
-            pendingStartAfterPermission = startStream || resumeStreamOnReattach
-            if (permissionWaitDeviceName != device.deviceName) {
-                permissionWaitDeviceName = device.deviceName
-                permissionRetryDevice = device
-                permissionRetryStart = pendingStartAfterPermission
-                FileLogger.log("USB permission not ready for ${device.deviceName}, retry 300ms")
-                fpsHandler.removeCallbacks(permissionRetryRunnable)
-                fpsHandler.postDelayed(permissionRetryRunnable, 300L)
-                return
-            }
-            FileLogger.log("Requesting USB permission for ${device.productName}")
-            usbMonitor.requestPermission(usbManager, device)
-            updateStatus(getString(R.string.status_waiting_permission))
-            return
-        }
-        permissionWaitDeviceName = null
-
-        openDeviceAndLoadModes(device, startStream)
-    }
-
-    private fun openDeviceAndLoadModes(device: UsbDevice, startStream: Boolean) {
-        if (!session.open(device)) {
-            setSwitchChecked(false)
-            updateStatus(getString(R.string.status_open_failed))
-            return
-        }
-        DeviceHistory.touch(this, device)
-
-        val modes = loadModesIntoDropdown(session.loadStreamModes())
-        if (modes.isEmpty()) {
-            updateStatus(getString(R.string.status_no_mjpeg))
-            setSwitchChecked(false)
-            return
-        }
-
-        updateStatus(getString(R.string.status_resolutions_ready, modes.size))
-        if (startStream) {
-            ensureHttpRunning()
-            applySelectedMode()
-        }
-    }
-
-    private fun loadModesIntoDropdown(modes: List<StreamMode>): List<StreamMode> {
-        streamModes = modes
-        val labels = modes.map { it.sizeLabel }
-        suppressResolutionCallback = true
-        dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
-        if (modes.isNotEmpty()) {
-            val remembered = session.currentDevice?.let { DeviceHistory.loadMode(this, it) }
-            val rememberedIdx = remembered?.let {
-                StreamMode.indexOfSize(modes, it.width, it.height)
-            }?.takeIf { it >= 0 }
-            val idx = rememberedIdx ?: StreamMode.preferredIndex(modes)
-            val mode = modes[idx]
-            val preferFps = when {
-                remembered != null &&
-                    remembered.width == mode.width &&
-                    remembered.height == mode.height &&
-                    mode.fpsList.contains(remembered.fps) -> remembered.fps
-                else -> mode.defaultFps
-            }
-            dropdownResolution.setText(mode.sizeLabel, false)
-            setDropdownEnabled(layoutResolution, dropdownResolution, modes.size > 1)
-            bindFpsDropdown(mode, preferFps = preferFps)
-            if (remembered != null && rememberedIdx != null) {
-                val key = session.currentDevice?.let { DeviceHistory.modelKey(it) } ?: "?"
-                FileLogger.log(
-                    "Restored remembered mode ${mode.sizeLabel} @${preferFps}fps for $key"
-                )
-            }
-        } else {
-            dropdownResolution.setText("", false)
-            setDropdownEnabled(layoutResolution, dropdownResolution, enabled = false)
-            clearFpsDropdown()
-        }
-        suppressResolutionCallback = false
-        return modes
-    }
-
-    private fun bindFpsDropdown(mode: StreamMode, preferFps: Int) {
-        val labels = mode.fpsLabels()
-        val selectedFps = mode.nearestFps(preferFps)
-        suppressFpsCallback = true
-        dropdownFps.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
-        dropdownFps.setText("$selectedFps fps", false)
-        setDropdownEnabled(layoutFps, dropdownFps, labels.size > 1)
-        suppressFpsCallback = false
-    }
-
-    private fun clearFpsDropdown() {
-        suppressFpsCallback = true
-        dropdownFps.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, emptyList<String>()))
-        dropdownFps.setText("", false)
-        setDropdownEnabled(layoutFps, dropdownFps, enabled = false)
-        suppressFpsCallback = false
-    }
-
-    private fun clearModes() {
-        streamModes = emptyList()
-        suppressResolutionCallback = true
-        dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, emptyList<String>()))
-        dropdownResolution.setText("", false)
-        setDropdownEnabled(layoutResolution, dropdownResolution, enabled = false)
-        suppressResolutionCallback = false
-        clearFpsDropdown()
-    }
-
-    private fun setDropdownEnabled(
-        layout: TextInputLayout,
-        dropdown: AutoCompleteTextView,
-        enabled: Boolean,
-    ) {
-        layout.isEnabled = enabled
-        dropdown.isEnabled = enabled
-        dropdown.isClickable = enabled
-        layout.endIconMode = if (enabled) {
-            TextInputLayout.END_ICON_DROPDOWN_MENU
-        } else {
-            TextInputLayout.END_ICON_NONE
-        }
-    }
-
-    private fun startStreaming() {
-        if (uvcDevices.isEmpty()) {
-            FileLogger.log("startStreaming: No UVC devices")
-            setSwitchChecked(false)
-            updateStatus(getString(R.string.status_no_device))
-            return
-        }
-        ensureHttpRunning()
-        val label = dropdownDevice.text?.toString()
-        val index = uvcDevices.indexOfFirst { UvcDeviceFinder.labelFor(it) == label }.coerceAtLeast(0)
-        val device = uvcDevices.getOrNull(index) ?: run {
-            setSwitchChecked(false)
-            return
-        }
-        prepareDevice(device, startStream = true)
-    }
-
-    private fun selectedMode(): StreamMode? {
-        val label = dropdownResolution.text?.toString()?.trim().orEmpty()
-        return streamModes.firstOrNull { it.sizeLabel == label }
-    }
-
-    private fun selectedFps(mode: StreamMode): Int? {
-        val fromUi = StreamMode.parseFpsLabel(dropdownFps.text?.toString().orEmpty())
-        if (fromUi != null && mode.fpsList.contains(fromUi)) return fromUi
-        return mode.defaultFps.takeIf { mode.fpsList.contains(it) } ?: mode.fpsList.firstOrNull()
-    }
-
-    private fun selectModeInUi(mode: StreamMode, fps: Int) {
-        suppressResolutionCallback = true
-        dropdownResolution.setText(mode.sizeLabel, false)
-        suppressResolutionCallback = false
-        bindFpsDropdown(mode, preferFps = fps)
-    }
-
-    private fun rememberSuccess(width: Int, height: Int, fps: Int) {
-        val device = session.currentDevice ?: return
-        DeviceHistory.saveMode(this, device, width, height, fps)
-    }
-
-    private fun applySelectedMode() {
-        val mode = selectedMode()
-        if (mode == null) {
-            FileLogger.log("applySelectedMode: no resolution selected")
-            setSwitchChecked(false)
-            updateStatus(getString(R.string.status_select_resolution))
-            return
-        }
-        val fps = selectedFps(mode)
-        if (fps == null) {
-            FileLogger.log("applySelectedMode: no fps selected")
-            setSwitchChecked(false)
-            updateStatus(getString(R.string.status_select_fps))
-            return
-        }
-        if (!session.isDeviceOpen) {
-            setSwitchChecked(false)
-            return
-        }
-
-        var lastRes = -1
-        for ((attempt, attemptFps) in streamAttempts(mode, fps)) {
-            lastRes = session.startStream(attempt.width, attempt.height, attemptFps)
-            if (lastRes != 0) continue
-            val fallback =
-                attempt.width != mode.width ||
-                    attempt.height != mode.height ||
-                    attemptFps != fps
-            selectModeInUi(attempt, attemptFps)
-            rememberSuccess(attempt.width, attempt.height, attemptFps)
-            resumeStreamOnReattach = false
-            if (::previewController.isInitialized) {
-                previewController.syncNative()
-            }
-            setSwitchChecked(true)
-            updateStatus(
-                if (fallback) {
-                    getString(
-                        R.string.status_streaming_fallback,
-                        attempt.width,
-                        attempt.height,
-                        attemptFps,
-                    )
-                } else {
-                    getString(R.string.status_streaming, attempt.width, attempt.height, attemptFps)
-                },
-            )
-            return
-        }
-
-        FileLogger.log("applySelectedMode: all modes failed (last=$lastRes)")
-        session.currentDevice?.let { DeviceHistory.clearMode(this, it) }
-        setSwitchChecked(false)
-        updateStatus(
-            getString(R.string.status_stream_error, lastRes, mode.width, mode.height, fps),
-        )
-    }
-
-    private fun streamAttempts(mode: StreamMode, fps: Int): List<Pair<StreamMode, Int>> {
-        val seen = linkedSetOf<String>()
-        val out = mutableListOf<Pair<StreamMode, Int>>()
-        fun add(m: StreamMode, f: Int) {
-            val key = "${m.width}x${m.height}@$f"
-            if (!seen.add(key)) return
-            out.add(m to f)
-        }
-        add(mode, fps)
-        mode.fpsList.sorted().forEach { add(mode, it) }
-        streamModes
-            .filter { it.width != mode.width || it.height != mode.height }
-            .sortedBy { it.width * it.height }
-            .forEach { other ->
-                add(other, other.defaultFps)
-                other.fpsList.sorted().forEach { add(other, it) }
-            }
-        return out
-    }
-
-    private fun stopStreaming() {
-        session.stopStream()
-        tvFps.visibility = View.GONE
-        updateStatus(getString(R.string.status_idle))
-        setSwitchChecked(false)
-    }
-
     private fun onStreamSwitchChanged(isChecked: Boolean) {
         FileLogger.log("Switch changed: $isChecked")
-        if (!isChecked) resumeStreamOnReattach = false
-        if (isChecked) startStreaming() else stopStreaming()
+        val service = capture ?: return
+        if (isChecked) {
+            val label = dropdownDevice.text?.toString()
+            val device = service.uvcDevices.firstOrNull { UvcDeviceFinder.labelFor(it) == label }
+            service.startCapture(device)
+        } else {
+            service.stopCapture(userInitiated = true)
+        }
     }
 
     private fun setSwitchChecked(checked: Boolean) {
@@ -879,6 +553,18 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         switchStream.isChecked = checked
         switchStream.setOnCheckedChangeListener { _, isChecked ->
             onStreamSwitchChanged(isChecked)
+        }
+    }
+
+    private fun syncBatterySwitch() {
+        val exempt = BatteryKeepAlive.isExempt(this)
+        if (switchBattery.isChecked == exempt) return
+        switchBattery.setOnCheckedChangeListener(null)
+        switchBattery.isChecked = exempt
+        switchBattery.setOnCheckedChangeListener { _, checked ->
+            if (checked == BatteryKeepAlive.isExempt(this)) return@setOnCheckedChangeListener
+            BatteryKeepAlive.openExemptionUi(this)
+            fpsHandler.post { syncBatterySwitch() }
         }
     }
 
@@ -896,19 +582,14 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     override fun onDestroy() {
         super.onDestroy()
         fpsHandler.removeCallbacks(fpsRunnable)
-        fpsHandler.removeCallbacks(usbRetryRunnable)
-        fpsHandler.removeCallbacks(permissionRetryRunnable)
         if (::previewController.isInitialized) {
             previewController.release()
         }
-        if (::usbMonitor.isInitialized) {
-            usbMonitor.unregister()
+        if (bound) {
+            capture?.removeListener(this)
+            runCatching { unbindService(connection) }
+            bound = false
         }
-        if (::httpStream.isInitialized) {
-            httpStream.stop()
-        }
-        if (::session.isInitialized) {
-            session.close()
-        }
+        capture = null
     }
 }
