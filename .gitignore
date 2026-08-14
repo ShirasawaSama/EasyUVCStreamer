@@ -16,3 +16,7 @@
 .artifacts
 local.properties
 build
+keystore.properties
+*.jks
+*.keystore
+*.p12

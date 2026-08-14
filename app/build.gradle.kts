@@ -1,6 +1,22 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
 }
+
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+}
+val releaseStorePath = keystoreProperties.getProperty("storeFile")
+val releaseStoreFile: File? =
+    if (releaseStorePath.isNullOrBlank()) {
+        null
+    } else {
+        file(releaseStorePath).takeIf { it.isFile }
+    }
 
 android {
     namespace = "com.omoai.simpleuvcstreamer"
@@ -37,14 +53,28 @@ android {
         }
     }
 
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             // AGP 9.3+: enables R8 code shrinking/obfuscation + resource shrinking.
             optimization {
                 enable = true
             }
-            // Local/distributable APK until a release keystore is configured.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (releaseStoreFile != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             ndk {
                 // Upload native symbols to Play / keep crash stacks useful.
                 debugSymbolLevel = "SYMBOL_TABLE"

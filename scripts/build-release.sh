@@ -9,7 +9,7 @@
 #   ./scripts/build-release.sh --out ./dist
 #
 # Notes:
-#   - Release currently signs with the debug keystore (see app/build.gradle.kts).
+#   - Signs with signing/release keystore when keystore.properties exists.
 #   - Requires Android SDK (local.properties / ANDROID_HOME) and vcpkg (VCPKG_ROOT).
 
 set -euo pipefail
