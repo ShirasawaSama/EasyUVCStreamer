@@ -103,6 +103,7 @@
                 </com.google.android.material.textfield.TextInputLayout>
 
                 <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/layoutResolution"
                     style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -181,7 +182,7 @@
                     <ImageView
                         android:id="@+id/imagePreview"
                         android:layout_width="match_parent"
-                        android:layout_height="320dp"
+                        android:layout_height="wrap_content"
                         android:adjustViewBounds="true"
                         android:contentDescription="@string/preview_content_description"
                         android:scaleType="fitCenter" />

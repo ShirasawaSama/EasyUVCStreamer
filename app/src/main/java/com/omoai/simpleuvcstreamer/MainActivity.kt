@@ -27,6 +27,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import com.omoai.simpleuvcstreamer.preview.FramePreviewController
 import com.omoai.simpleuvcstreamer.stream.HttpStreamController
 import com.omoai.simpleuvcstreamer.stream.NetworkAddresses
@@ -60,7 +61,9 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
     private lateinit var switchPreview: MaterialSwitch
     private lateinit var previewContainer: MaterialCardView
     private lateinit var dropdownDevice: AutoCompleteTextView
+    private lateinit var layoutResolution: TextInputLayout
     private lateinit var dropdownResolution: AutoCompleteTextView
+    private lateinit var layoutFps: TextInputLayout
     private lateinit var dropdownFps: AutoCompleteTextView
     private lateinit var imagePreview: ImageView
     private lateinit var editHttpPort: TextInputEditText
@@ -144,8 +147,12 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         switchPreview = findViewById(R.id.switchPreview)
         previewContainer = findViewById(R.id.previewContainer)
         dropdownDevice = findViewById(R.id.dropdownDevice)
+        layoutResolution = findViewById(R.id.layoutResolution)
         dropdownResolution = findViewById(R.id.dropdownResolution)
+        layoutFps = findViewById(R.id.layoutFps)
         dropdownFps = findViewById(R.id.dropdownFps)
+        setDropdownEnabled(layoutResolution, dropdownResolution, enabled = false)
+        setDropdownEnabled(layoutFps, dropdownFps, enabled = false)
         imagePreview = findViewById(R.id.imagePreview)
         editHttpPort = findViewById(R.id.editHttpPort)
         btnApplyHttpPort = findViewById(R.id.btnApplyHttpPort)
@@ -675,6 +682,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
                 else -> mode.defaultFps
             }
             dropdownResolution.setText(mode.sizeLabel, false)
+            setDropdownEnabled(layoutResolution, dropdownResolution, modes.size > 1)
             bindFpsDropdown(mode, preferFps = preferFps)
             if (remembered != null && rememberedIdx != null) {
                 val key = session.currentDevice?.let { DeviceHistory.modelKey(it) } ?: "?"
@@ -684,6 +692,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             }
         } else {
             dropdownResolution.setText("", false)
+            setDropdownEnabled(layoutResolution, dropdownResolution, enabled = false)
             clearFpsDropdown()
         }
         suppressResolutionCallback = false
@@ -696,6 +705,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         suppressFpsCallback = true
         dropdownFps.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
         dropdownFps.setText("$selectedFps fps", false)
+        setDropdownEnabled(layoutFps, dropdownFps, labels.size > 1)
         suppressFpsCallback = false
     }
 
@@ -703,6 +713,7 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         suppressFpsCallback = true
         dropdownFps.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, emptyList<String>()))
         dropdownFps.setText("", false)
+        setDropdownEnabled(layoutFps, dropdownFps, enabled = false)
         suppressFpsCallback = false
     }
 
@@ -711,8 +722,24 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
         suppressResolutionCallback = true
         dropdownResolution.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, emptyList<String>()))
         dropdownResolution.setText("", false)
+        setDropdownEnabled(layoutResolution, dropdownResolution, enabled = false)
         suppressResolutionCallback = false
         clearFpsDropdown()
+    }
+
+    private fun setDropdownEnabled(
+        layout: TextInputLayout,
+        dropdown: AutoCompleteTextView,
+        enabled: Boolean,
+    ) {
+        layout.isEnabled = enabled
+        dropdown.isEnabled = enabled
+        dropdown.isClickable = enabled
+        layout.endIconMode = if (enabled) {
+            TextInputLayout.END_ICON_DROPDOWN_MENU
+        } else {
+            TextInputLayout.END_ICON_NONE
+        }
     }
 
     private fun startStreaming() {
