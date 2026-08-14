@@ -62,7 +62,10 @@ class FramePreviewController(
     }
 
     fun setEnabled(enabled: Boolean) {
-        if (previewEnabled.get() == enabled) return
+        if (previewEnabled.get() == enabled) {
+            if (enabled) UvcNative.nativeSetPreviewEnabled(true)
+            return
+        }
         previewEnabled.set(enabled)
         // Native only copies JPEG into the preview slot when this is true.
         UvcNative.nativeSetPreviewEnabled(enabled)
@@ -72,8 +75,27 @@ class FramePreviewController(
             workerHandler?.post(pollRunnable)
         } else {
             workerHandler?.removeCallbacks(pollRunnable)
-            mainHandler.post { imageView.setImageDrawable(null) }
+            clearFrame()
         }
+    }
+
+    fun clearFrame() {
+        mainHandler.post {
+            val old = (imageView.drawable as? BitmapDrawable)?.bitmap
+            imageView.setImageDrawable(null)
+            if (old != null && !old.isRecycled) {
+                old.recycle()
+            }
+        }
+    }
+
+    /** Re-assert native flag after USB close/reopen (close must not leave preview stuck). */
+    fun syncNative() {
+        if (!previewEnabled.get()) return
+        UvcNative.nativeSetPreviewEnabled(true)
+        ensureWorker()
+        workerHandler?.removeCallbacks(pollRunnable)
+        workerHandler?.post(pollRunnable)
     }
 
     fun isEnabled(): Boolean = previewEnabled.get()

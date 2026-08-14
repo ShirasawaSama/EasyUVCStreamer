@@ -132,7 +132,6 @@ bool copy_http_frame_if_newer(uint64_t &last_seq, std::vector<uint8_t> &out) {
 }
 
 void clear() {
-    g_preview_enabled.store(false, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(g_preview_mu);
         g_latest_jpeg.clear();

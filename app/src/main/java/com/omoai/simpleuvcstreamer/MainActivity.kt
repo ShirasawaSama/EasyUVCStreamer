@@ -425,6 +425,9 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             resumeStreamOnReattach = session.isStreaming || switchStream.isChecked
             // Turn off stream switch first so refreshDeviceList will not reopen immediately.
             setSwitchChecked(false)
+            if (::previewController.isInitialized) {
+                previewController.clearFrame()
+            }
             suppressAutoOpen(2500L)
             pendingStartAfterPermission = false
             pendingLaunchAutoStart = false
@@ -761,6 +764,9 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             selectModeInUi(attempt, attemptFps)
             rememberSuccess(attempt.width, attempt.height, attemptFps)
             resumeStreamOnReattach = false
+            if (::previewController.isInitialized) {
+                previewController.syncNative()
+            }
             setSwitchChecked(true)
             updateStatus(
                 if (fallback) {
