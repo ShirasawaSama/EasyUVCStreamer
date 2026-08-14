@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Outbound HTTP from this app is denied by default.
+  Only the on-device loopback is allowed (in-app checks of the local MJPEG URL).
+  The native LAN server uses raw sockets; LAN clients are not governed by this file.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

@@ -21,6 +21,7 @@
     <string name="http_port_hint">端口</string>
     <string name="http_apply_port">应用</string>
     <string name="http_urls_title">可访问地址</string>
+    <string name="http_cleartext_hint">画面只在同一 Wi‑Fi 里用 http 传送，没有加密。只有连着同一个路由器的设备能打开，请不要把链接发到公网。</string>
     <string name="http_no_urls">暂无可用地址</string>
     <string name="http_tap_to_copy">点按复制链接</string>
     <string name="http_copied">已复制到剪贴板</string>

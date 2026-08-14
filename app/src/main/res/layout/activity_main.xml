@@ -238,6 +238,13 @@
                     android:textAppearance="@style/Text.Uvc.Section" />
 
                 <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/http_cleartext_hint"
+                    android:textAppearance="@style/Text.Uvc.Label" />
+
+                <TextView
                     android:id="@+id/tvHttpState"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
