@@ -700,64 +700,58 @@ class MainActivity : AppCompatActivity(), UsbDeviceMonitor.Listener {
             return
         }
 
-        val startRes = session.startStream(mode.width, mode.height, fps)
-        if (startRes == 0) {
-            rememberSuccess(mode.width, mode.height, fps)
+        var lastRes = -1
+        for ((attempt, attemptFps) in streamAttempts(mode, fps)) {
+            lastRes = session.startStream(attempt.width, attempt.height, attemptFps)
+            if (lastRes != 0) continue
+            val fallback =
+                attempt.width != mode.width ||
+                    attempt.height != mode.height ||
+                    attemptFps != fps
+            selectModeInUi(attempt, attemptFps)
+            rememberSuccess(attempt.width, attempt.height, attemptFps)
             setSwitchChecked(true)
-            updateStatus(getString(R.string.status_streaming, mode.width, mode.height, fps))
-            return
-        }
-
-        FileLogger.log(
-            "applySelectedMode: ${mode.sizeLabel}@$fps failed ($startRes), trying device default"
-        )
-        session.currentDevice?.let { DeviceHistory.clearMode(this, it) }
-
-        val defaultMode = StreamMode.deviceDefault(streamModes)
-        val defaultFps = defaultMode?.defaultFps
-        val canFallback = defaultMode != null &&
-            defaultFps != null &&
-            (defaultMode.width != mode.width ||
-                defaultMode.height != mode.height ||
-                defaultFps != fps)
-
-        if (canFallback) {
-            val fallbackRes = session.startStream(defaultMode!!.width, defaultMode.height, defaultFps!!)
-            if (fallbackRes == 0) {
-                selectModeInUi(defaultMode, defaultFps)
-                rememberSuccess(defaultMode.width, defaultMode.height, defaultFps)
-                setSwitchChecked(true)
-                updateStatus(
+            updateStatus(
+                if (fallback) {
                     getString(
                         R.string.status_streaming_fallback,
-                        defaultMode.width,
-                        defaultMode.height,
-                        defaultFps,
+                        attempt.width,
+                        attempt.height,
+                        attemptFps,
                     )
-                )
-                return
-            }
-            FileLogger.log(
-                "applySelectedMode: default ${defaultMode.sizeLabel}@$defaultFps " +
-                    "also failed ($fallbackRes)"
-            )
-            setSwitchChecked(false)
-            updateStatus(
-                getString(
-                    R.string.status_stream_error,
-                    fallbackRes,
-                    defaultMode.width,
-                    defaultMode.height,
-                    defaultFps,
-                )
+                } else {
+                    getString(R.string.status_streaming, attempt.width, attempt.height, attemptFps)
+                },
             )
             return
         }
 
+        FileLogger.log("applySelectedMode: all modes failed (last=$lastRes)")
+        session.currentDevice?.let { DeviceHistory.clearMode(this, it) }
         setSwitchChecked(false)
         updateStatus(
-            getString(R.string.status_stream_error, startRes, mode.width, mode.height, fps)
+            getString(R.string.status_stream_error, lastRes, mode.width, mode.height, fps),
         )
+    }
+
+    private fun streamAttempts(mode: StreamMode, fps: Int): List<Pair<StreamMode, Int>> {
+        val seen = linkedSetOf<String>()
+        val out = mutableListOf<Pair<StreamMode, Int>>()
+        fun add(m: StreamMode, f: Int) {
+            val key = "${m.width}x${m.height}@$f"
+            if (!seen.add(key)) return
+            out.add(m to f)
+        }
+        add(mode, fps)
+        mode.fpsList.sorted().forEach { add(mode, it) }
+        streamModes
+            .filter { it.width != mode.width || it.height != mode.height }
+            .sortedBy { it.width * it.height }
+            .forEach { other ->
+                add(other, other.defaultFps)
+                other.fpsList.sorted().forEach { add(other, it) }
+            }
+        return out
     }
 
     private fun stopStreaming() {

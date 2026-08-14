@@ -235,29 +235,30 @@ std::string get_resolutions() {
                         int fps = interval_to_fps(*interval);
                         if (fps > 0) agg.fps.insert(fps);
                     }
+                } else {
+                    auto add_fps = [&](uint32_t interval) {
+                        int fps = interval_to_fps(interval);
+                        if (fps > 0) agg.fps.insert(fps);
+                    };
+                    add_fps(frame_desc->dwDefaultFrameInterval);
+                    add_fps(frame_desc->dwMinFrameInterval);
+                    add_fps(frame_desc->dwMaxFrameInterval);
                 }
-                if (frame_desc->dwDefaultFrameInterval != 0) {
-                    int fps = interval_to_fps(frame_desc->dwDefaultFrameInterval);
-                    if (fps > 0) {
-                        agg.fps.insert(fps);
-                        if (agg.default_fps == 0) agg.default_fps = fps;
-                    }
-                }
-                if (frame_desc->dwMinFrameInterval != 0) {
-                    int fps = interval_to_fps(frame_desc->dwMinFrameInterval);
-                    if (fps > 0) agg.fps.insert(fps);
-                }
-                if (frame_desc->dwMaxFrameInterval != 0) {
-                    int fps = interval_to_fps(frame_desc->dwMaxFrameInterval);
-                    if (fps > 0) agg.fps.insert(fps);
+
+                const int advertised_default =
+                        interval_to_fps(frame_desc->dwDefaultFrameInterval);
+                if (advertised_default > 0 && agg.fps.count(advertised_default) &&
+                    agg.default_fps == 0) {
+                    agg.default_fps = advertised_default;
                 }
 
                 const bool is_default_frame =
                         frame_desc->bFrameIndex == format_desc->bDefaultFrameIndex;
                 if (is_default_frame) {
                     agg.device_default = true;
-                    int def = interval_to_fps(frame_desc->dwDefaultFrameInterval);
-                    if (def > 0) agg.default_fps = def;
+                    if (advertised_default > 0 && agg.fps.count(advertised_default)) {
+                        agg.default_fps = advertised_default;
+                    }
                 }
 
                 frame_desc = frame_desc->next;
@@ -283,11 +284,8 @@ std::string get_resolutions() {
             agg.fps.insert(30);
         }
         if (agg.default_fps == 0 || agg.fps.count(agg.default_fps) == 0) {
-            if (agg.fps.count(30)) {
-                agg.default_fps = 30;
-            } else {
-                agg.default_fps = *agg.fps.rbegin();
-            }
+            // Prefer the lowest advertised rate — more likely to fit USB isoch.
+            agg.default_fps = *agg.fps.begin();
         }
 
         ss << w << "x" << h << "|";
