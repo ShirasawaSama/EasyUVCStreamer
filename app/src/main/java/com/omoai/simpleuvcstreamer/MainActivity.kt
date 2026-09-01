@@ -319,7 +319,7 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
                     if (needBattery) requestBatteryExemption() else finishKeepAliveChain()
                 } else if (missing.isNotEmpty()) {
                     FileLogger.log("Requesting permissions after rationale: ${missing.toList()}")
-                    AppPermissions.markAskedSystemPrompt(this)
+                    AppPermissions.markAskedSystemPrompt(this, missing)
                     pendingBatteryAfterPerms = needBattery
                     runtimePermissionLauncher.launch(missing)
                 } else {

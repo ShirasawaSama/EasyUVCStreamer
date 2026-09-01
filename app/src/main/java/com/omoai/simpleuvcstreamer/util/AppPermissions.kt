@@ -14,18 +14,25 @@ import androidx.core.content.ContextCompat
 /**
  * Runtime permissions related to USB UVC dongles and keep-alive.
  *
- * CAMERA / RECORD_AUDIO: many UVC gadgets are classified as camera+mic by OEMs.
+ * USB_CAMERA / RECORD_AUDIO: USB cameras may expose both video and audio interfaces.
  * POST_NOTIFICATIONS: required so the capture foreground service can show its notice.
  */
 object AppPermissions {
-    private const val PREFS = "runtime_perms"
-    private const val KEY_ASKED = "asked_system_prompt"
+    const val USB_CAMERA = "horizonos.permission.USB_CAMERA"
 
-    fun runtime(): Array<String> {
+    private const val PREFS = "runtime_perms"
+    private const val KEY_ASKED_PERMISSIONS = "asked_permissions"
+
+    fun runtime(context: Context): Array<String> {
         val list = mutableListOf(
-            Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO,
         )
+        // Horizon OS defines a dedicated runtime permission for external USB cameras.
+        // Other Android systems do not know this permission and should not be prompted for it.
+        @Suppress("DEPRECATION")
+        if (runCatching { context.packageManager.getPermissionInfo(USB_CAMERA, 0) }.isSuccess) {
+            list.add(USB_CAMERA)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             list.add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -33,31 +40,33 @@ object AppPermissions {
     }
 
     fun missing(context: Context): Array<String> =
-        runtime().filter {
+        runtime(context).filter {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
 
     fun isGranted(context: Context, permission: String): Boolean =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
-    fun hasAskedSystemPrompt(context: Context): Boolean {
+    private fun askedPermissions(context: Context): Set<String> {
         return context.applicationContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_ASKED, false)
+            .getStringSet(KEY_ASKED_PERMISSIONS, emptySet())
+            .orEmpty()
     }
 
-    fun markAskedSystemPrompt(context: Context) {
-        context.applicationContext
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    fun markAskedSystemPrompt(context: Context, permissions: Array<String>) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        prefs
             .edit()
-            .putBoolean(KEY_ASKED, true)
+            .putStringSet(KEY_ASKED_PERMISSIONS, askedPermissions(context) + permissions)
             .apply()
     }
 
     /** True when the user chose “Don’t ask again” (or the OEM hides the prompt). */
     fun anyPermanentlyDenied(activity: Activity, permissions: Array<String>): Boolean {
-        if (!hasAskedSystemPrompt(activity)) return false
+        val asked = askedPermissions(activity)
         return permissions.any { perm ->
+            perm in asked &&
             !isGranted(activity, perm) &&
                 !ActivityCompat.shouldShowRequestPermissionRationale(activity, perm)
         }
