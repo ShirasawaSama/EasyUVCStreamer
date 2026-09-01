@@ -22,7 +22,7 @@
 ## 环境要求
 
 - Android **8.0+**（`minSdk 28`），设备需支持 **USB Host**
-- Android Studio + NDK（当前工程默认指向本机 NDK 路径，可按机器修改）
+- Android Studio + NDK（可通过 `ANDROID_NDK_HOME` 指定路径）
 - [vcpkg](https://vcpkg.io/)，并设置环境变量 `VCPKG_ROOT`（未设置时默认 `~/vcpkg`）
 
 Native 依赖（manifest 模式，构建时自动拉取）：
@@ -40,13 +40,23 @@ echo $VCPKG_ROOT
 ./gradlew :app:assembleDebug
 ```
 
-如 NDK 路径与 `app/build.gradle.kts` 里写死的不一致，请改成你的本机路径后再编。
+CI 或自定义环境可通过 `ANDROID_NDK_HOME` 指定 NDK 路径。
 
 ABI：`arm64-v8a`、`x86_64`。
 
+### GitHub Release
+
+发布 GitHub Release 后，Actions 会从 Release Tag（如 `v1.2.3`）读取 `versionName`，调用
+`scripts/build-release.sh` 构建，并把 APK 上传到该 Release。仓库需要配置以下 Actions Secrets：
+
+- `RELEASE_KEYSTORE_BASE64`：release keystore 的 Base64 内容
+- `RELEASE_STORE_PASSWORD`
+- `RELEASE_KEY_ALIAS`
+- `RELEASE_KEY_PASSWORD`
+
 ## 使用
 
-1. 授权相机 / 录音（部分机型插 UVC 会提示麦克风；视频主线仍可用）
+1. 授权 USB 摄像头 / 录音（部分机型插 UVC 会提示麦克风；视频主线仍可用）
 2. 插入 UVC 摄像头并授予 USB 权限
 3. 选择分辨率，打开「开始采集」
 4. 在「推流」区查看地址，例如：

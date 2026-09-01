@@ -27,8 +27,8 @@ android {
         // API 28+: libhv (FORTIFY) needs __sendto_chk; keep minSdk in sync with NDK platform.
         minSdk = 28
         targetSdk = 37
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = providers.gradleProperty("releaseVersionCode").orNull?.toIntOrNull() ?: 2
+        versionName = providers.gradleProperty("releaseVersionName").orNull ?: "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -39,7 +39,9 @@ android {
         externalNativeBuild {
             cmake {
                 val vcpkgRoot = System.getenv("VCPKG_ROOT") ?: "${System.getProperty("user.home")}/vcpkg"
-                val ndkDir = "/Users/shirasawa/Library/Android/sdk/ndk/28.2.13676358"
+                val ndkDir = System.getenv("ANDROID_NDK_HOME")
+                    ?: System.getenv("ANDROID_HOME")?.let { "$it/ndk/28.2.13676358" }
+                    ?: "${System.getProperty("user.home")}/Library/Android/sdk/ndk/28.2.13676358"
 
                 arguments += listOf(
                     "-DVCPKG_ROOT=$vcpkgRoot",

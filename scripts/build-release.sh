@@ -145,7 +145,10 @@ log "Built $APK_SRC ($SIZE)"
 
 if [[ -n "$OUT_DIR" ]]; then
   mkdir -p "$OUT_DIR"
-  VERSION_NAME="$(sed -n 's/.*versionName *= *"\([^"]*\)".*/\1/p' "$ROOT/app/build.gradle.kts" | head -1)"
+  VERSION_NAME="${ORG_GRADLE_PROJECT_releaseVersionName:-}"
+  if [[ -z "$VERSION_NAME" ]]; then
+    VERSION_NAME="$(sed -n 's/.*versionName *= *.*?: *"\([^"]*\)".*/\1/p' "$ROOT/app/build.gradle.kts" | head -1)"
+  fi
   VERSION_NAME="${VERSION_NAME:-1.0}"
   STAMP="$(date +%Y%m%d-%H%M%S)"
   APK_DST="$OUT_DIR/EasyUVCStreamer-${VERSION_NAME}-${STAMP}-release.apk"
