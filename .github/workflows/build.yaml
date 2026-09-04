@@ -51,6 +51,19 @@ jobs:
           ln -sfn android-37.0 "${ANDROID_SDK_ROOT}/platforms/android-37"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
 
+      - name: Install native build deps
+        shell: bash
+        run: |
+          # libusb (via vcpkg-make) needs host autotools on the runner.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            autoconf-archive \
+            automake \
+            libtool \
+            pkg-config \
+            ninja-build
+
       - name: Restore vcpkg binary cache
         uses: actions/cache@v4
         with:
