@@ -41,11 +41,14 @@ jobs:
       - name: Install Android build tools
         shell: bash
         run: |
+          # API 37 ships as platforms;android-37.0 (directory android-37.0).
+          # AGP still looks for platforms/android-37 when compileSdk = 37.
           sdkmanager \
-            "platforms;android-37" \
+            "platforms;android-37.0" \
             "build-tools;37.0.0" \
             "ndk;${ANDROID_NDK_VERSION}" \
             "cmake;3.22.1"
+          ln -sfn android-37.0 "${ANDROID_SDK_ROOT}/platforms/android-37"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
 
       - name: Restore vcpkg binary cache

@@ -20,7 +20,12 @@ val releaseStoreFile: File? =
 
 android {
     namespace = "com.omoai.simpleuvcstreamer"
-    compileSdk = 37
+    // Platform package is platforms;android-37.0; tell AGP the minor explicitly.
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 0
+        }
+    }
 
     defaultConfig {
         applicationId = "com.omoai.simpleuvcstreamer"
