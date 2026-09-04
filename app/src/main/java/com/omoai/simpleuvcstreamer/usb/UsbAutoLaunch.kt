@@ -8,6 +8,10 @@ import com.omoai.simpleuvcstreamer.util.FileLogger
 /**
  * Toggles system "open app when UVC plugged in" by enabling/disabling an activity-alias
  * that owns the USB_DEVICE_ATTACHED intent-filter (Manifest filters are otherwise static).
+ *
+ * Meta Quest / Horizon OS: disabling the alias that cold-started the current task can kill
+ * the process even with [PackageManager.DONT_KILL_APP]. Never disable that alias for an
+ * Activity instance launched via USB_DEVICE_ATTACHED (see [setEnabled] `applyComponent`).
  */
 object UsbAutoLaunch {
 
@@ -24,27 +28,25 @@ object UsbAutoLaunch {
             .getBoolean(KEY_ENABLED, DEFAULT_ENABLED)
     }
 
-    fun setEnabled(context: Context, enabled: Boolean) {
+    /**
+     * @param applyComponent when false, only update the preference (needed on Quest when
+     *   the current task was started from [ALIAS_NAME] — disabling that alias kills us).
+     */
+    fun setEnabled(context: Context, enabled: Boolean, applyComponent: Boolean = true) {
         context.applicationContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_ENABLED, enabled)
             .apply()
-        applyComponentState(context, enabled)
-        FileLogger.log("USB auto-launch component enabled=$enabled")
+        if (applyComponent) {
+            applyComponentState(context, enabled)
+        }
+        FileLogger.log("USB auto-launch enabled=$enabled applyComponent=$applyComponent")
     }
 
     /** Sync PackageManager with saved preference (call on startup / when leaving the UI). */
     fun syncFromPrefs(context: Context) {
         applyComponentState(context, isEnabled(context))
-    }
-
-    /**
-     * Hide the system "choose an app for this USB device" sheet while this app is
-     * already in the foreground. In-app BroadcastReceiver still gets attach/detach.
-     */
-    fun suppressSystemChooser(context: Context) {
-        applyComponentState(context, false)
     }
 
     private fun applyComponentState(context: Context, enabled: Boolean) {

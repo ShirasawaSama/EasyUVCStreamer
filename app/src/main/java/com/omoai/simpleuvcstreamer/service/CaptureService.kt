@@ -16,6 +16,7 @@ import com.omoai.simpleuvcstreamer.R
 import com.omoai.simpleuvcstreamer.stream.HttpStreamController
 import com.omoai.simpleuvcstreamer.usb.UsbDeviceMonitor
 import com.omoai.simpleuvcstreamer.usb.UvcDeviceFinder
+import com.omoai.simpleuvcstreamer.util.AppPermissions
 import com.omoai.simpleuvcstreamer.util.FileLogger
 import com.omoai.simpleuvcstreamer.uvc.AutoStartPrefs
 import com.omoai.simpleuvcstreamer.uvc.DeviceHistory
@@ -224,6 +225,16 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
         scheduleDeviceRefresh(preferDevice = device, forceAutoStream = wantStream)
     }
 
+    /** Called after the UI finishes the runtime-permission / battery keep-alive prompts. */
+    fun onRuntimePermissionsReady() {
+        if (!nativeReady) return
+        refreshDeviceList(
+            forceAutoStream = AutoStartPrefs.isEnabled(this) ||
+                CaptureKeepAlive.wantStreaming(this) ||
+                resumeStreamOnReattach,
+        )
+    }
+
     fun selectDevice(device: UsbDevice) {
         prepareDevice(device, startStream = isStreaming || resumeStreamOnReattach)
     }
@@ -337,7 +348,8 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
                     CaptureKeepAlive.wantStreaming(this) ||
                     resumeStreamOnReattach
             pendingStartAfterPermission = false
-            openDeviceAndLoadModes(device, startStream = shouldStart)
+            // Re-enter prepareDevice so CAMERA / USB_CAMERA is checked (Quest).
+            prepareDevice(device, startStream = shouldStart)
         } else {
             pendingStartAfterPermission = false
             resumeStreamOnReattach = false
@@ -436,6 +448,12 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
             return
         }
         permissionWaitDeviceName = null
+        if (AppPermissions.missingCameraAccess(this)) {
+            FileLogger.log("Defer open: camera permission missing (Quest USB_CAMERA / CAMERA)")
+            statusText = getString(R.string.status_waiting_camera_permission)
+            notifyUi()
+            return
+        }
         openDeviceAndLoadModes(device, startStream)
     }
 

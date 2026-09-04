@@ -92,6 +92,11 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
     private var batterySkippedThisSession = false
     private var pendingBatteryAfterPerms = false
     private var pendingAfterKeepAlive: (() -> Unit)? = null
+    /**
+     * Quest / Horizon OS kills the process when the UsbAttachAlias that cold-started us
+     * is disabled (DONT_KILL_APP is ignored). Never disable that alias for this instance.
+     */
+    private var launchedViaUsbAttach = false
 
     private val runtimePermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -152,6 +157,11 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
         setContentView(R.layout.activity_main)
         SafeArea.apply(this, R.id.main)
         FileLogger.log("--- App Started ---")
+        launchedViaUsbAttach =
+            intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED
+        if (launchedViaUsbAttach) {
+            FileLogger.log("Cold start via USB_DEVICE_ATTACHED — will not disable UsbAttachAlias")
+        }
 
         tvStatus = findViewById(R.id.tvStatus)
         tvFps = findViewById(R.id.tvFps)
@@ -211,11 +221,17 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
             previewContainer.visibility = if (checked) View.VISIBLE else View.GONE
         }
 
-        UsbAutoLaunch.syncFromPrefs(this)
+        if (!launchedViaUsbAttach) {
+            UsbAutoLaunch.syncFromPrefs(this)
+        }
         switchAutoLaunch.isChecked = UsbAutoLaunch.isEnabled(this)
         switchAutoLaunch.setOnCheckedChangeListener { _, checked ->
-            UsbAutoLaunch.setEnabled(this, checked)
-            UsbAutoLaunch.suppressSystemChooser(this)
+            // Quest: never disable the alias that launched this task; prefs still update.
+            UsbAutoLaunch.setEnabled(
+                this,
+                checked,
+                applyComponent = !launchedViaUsbAttach || checked,
+            )
         }
 
         switchBattery.setOnCheckedChangeListener { _, checked ->
@@ -241,7 +257,6 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
     override fun onResume() {
         super.onResume()
         uiResumed = true
-        UsbAutoLaunch.suppressSystemChooser(this)
         syncBatterySwitch()
         if (switchPreview.isChecked) {
             previewController.setEnabled(true)
@@ -252,7 +267,10 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
     override fun onPause() {
         uiResumed = false
         previewController.setEnabled(false)
-        UsbAutoLaunch.syncFromPrefs(this)
+        // Quest: do not apply a "disabled" pref onto the alias that launched this task.
+        if (!launchedViaUsbAttach) {
+            UsbAutoLaunch.syncFromPrefs(this)
+        }
         super.onPause()
     }
 
@@ -263,7 +281,10 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
     }
 
     override fun onCaptureStateChanged() {
-        runOnUiThread { renderCaptureState() }
+        runOnUiThread {
+            renderCaptureState()
+            maybePromptKeepAlive()
+        }
     }
 
     private fun bindCaptureService() {
@@ -274,9 +295,13 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
     private fun maybePromptKeepAlive() {
         if (keepAlivePromptedThisSession) return
         val service = capture ?: return
+        val waitingCamera = AppPermissions.missingCameraAccess(this) &&
+            service.statusText == getString(R.string.status_waiting_camera_permission)
         val wantsKeepAlive = AutoStartPrefs.isEnabled(this) ||
             service.isStreaming ||
-            CaptureKeepAlive.wantStreaming(this)
+            CaptureKeepAlive.wantStreaming(this) ||
+            intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED ||
+            waitingCamera
         if (!wantsKeepAlive) return
         if (AppPermissions.missing(this).isEmpty() &&
             (BatteryKeepAlive.isExempt(this) || batterySkippedThisSession)
@@ -284,7 +309,9 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
             return
         }
         keepAlivePromptedThisSession = true
-        ensureKeepAliveThen { }
+        ensureKeepAliveThen {
+            capture?.onRuntimePermissionsReady()
+        }
     }
 
     private fun ensureKeepAliveThen(after: () -> Unit) {

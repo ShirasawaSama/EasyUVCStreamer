@@ -41,6 +41,7 @@
     <string name="status_ready">系统就绪</string>
     <string name="status_no_device">未检测到 UVC 设备</string>
     <string name="status_waiting_permission">等待 USB 授权…</string>
+    <string name="status_waiting_camera_permission">请先允许摄像头权限，再打开 USB 摄像头</string>
     <string name="status_permission_denied">USB 授权被拒绝</string>
     <string name="status_open_failed">打开设备失败</string>
     <string name="status_no_mjpeg">该设备不支持 MJPEG</string>

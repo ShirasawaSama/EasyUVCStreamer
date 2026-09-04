@@ -49,6 +49,13 @@ object AppPermissions {
     fun isGranted(context: Context, permission: String): Boolean =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
+    /** True when the OS-specific USB/camera permission needed to open a UVC device is missing. */
+    fun missingCameraAccess(context: Context): Boolean {
+        return runtime(context).any { perm ->
+            (perm == USB_CAMERA || perm == Manifest.permission.CAMERA) && !isGranted(context, perm)
+        }
+    }
+
     private fun askedPermissions(context: Context): Set<String> {
         return context.applicationContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
