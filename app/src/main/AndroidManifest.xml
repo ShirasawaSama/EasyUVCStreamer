@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="horizonos.permission.USB_CAMERA" />
     <!-- USB UVC dongles often include a mic; OEMs warn without this even for video-only. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />

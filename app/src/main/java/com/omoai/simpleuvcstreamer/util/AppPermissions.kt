@@ -14,7 +14,7 @@ import androidx.core.content.ContextCompat
 /**
  * Runtime permissions related to USB UVC dongles and keep-alive.
  *
- * USB_CAMERA / RECORD_AUDIO: USB cameras may expose both video and audio interfaces.
+ * Camera / RECORD_AUDIO: USB cameras may expose both video and audio interfaces.
  * POST_NOTIFICATIONS: required so the capture foreground service can show its notice.
  */
 object AppPermissions {
@@ -32,6 +32,8 @@ object AppPermissions {
         @Suppress("DEPRECATION")
         if (runCatching { context.packageManager.getPermissionInfo(USB_CAMERA, 0) }.isSuccess) {
             list.add(USB_CAMERA)
+        } else {
+            list.add(Manifest.permission.CAMERA)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             list.add(Manifest.permission.POST_NOTIFICATIONS)

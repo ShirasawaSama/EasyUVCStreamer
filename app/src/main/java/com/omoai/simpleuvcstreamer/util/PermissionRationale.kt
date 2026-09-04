@@ -11,7 +11,7 @@ object PermissionRationale {
         needBattery: Boolean,
     ): String {
         val lines = mutableListOf(context.getString(R.string.perm_dialog_intro))
-        if (AppPermissions.USB_CAMERA in missing) {
+        if (AppPermissions.USB_CAMERA in missing || Manifest.permission.CAMERA in missing) {
             lines += context.getString(R.string.perm_rationale_camera)
         }
         if (Manifest.permission.RECORD_AUDIO in missing) {
