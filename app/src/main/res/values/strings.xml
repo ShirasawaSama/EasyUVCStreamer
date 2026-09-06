@@ -40,6 +40,8 @@
     <string name="status_init_crash">原生初始化崩溃</string>
     <string name="status_ready">系统就绪</string>
     <string name="status_no_device">未检测到 UVC 设备</string>
+    <string name="status_no_uvc_but_usb">已连接 %1$d 个 USB 设备，但未识别为 UVC（请看 logcat UVCStreamer）</string>
+    <string name="status_uvc_listed">已发现 %1$s · 打开采集开关以授权并连接</string>
     <string name="status_waiting_permission">等待 USB 授权…</string>
     <string name="status_waiting_camera_permission">请先允许摄像头权限，再打开 USB 摄像头</string>
     <string name="status_permission_denied">USB 授权被拒绝</string>

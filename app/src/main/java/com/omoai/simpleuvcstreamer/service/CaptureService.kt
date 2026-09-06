@@ -89,8 +89,15 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
         )
     }
     private val permissionRetryRunnable = Runnable {
-        val device = permissionRetryDevice ?: return@Runnable
-        prepareDevice(device, startStream = permissionRetryStart || shouldResumeStream())
+        val name = permissionRetryDevice?.deviceName ?: return@Runnable
+        val live = usbManager.deviceList[name]
+        if (live == null) {
+            FileLogger.log("USB permission retry aborted — device gone: $name")
+            permissionRetryDevice = null
+            permissionWaitDeviceName = null
+            return@Runnable
+        }
+        prepareDevice(live, startStream = permissionRetryStart || shouldResumeStream())
     }
 
     val isStreaming: Boolean get() = session.isStreaming
@@ -312,6 +319,17 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
     }
 
     override fun onDeviceDetached(device: UsbDevice) {
+        val waitingPerm =
+            permissionWaitDeviceName == device.deviceName ||
+                permissionRetryDevice?.deviceName == device.deviceName
+        if (waitingPerm) {
+            FileLogger.log("USB detach while waiting permission — cancel stale request")
+            permissionWaitDeviceName = null
+            permissionRetryDevice = null
+            pendingStartAfterPermission = false
+            handler.removeCallbacks(permissionRetryRunnable)
+            suppressAutoOpen(1500L)
+        }
         if (UvcDeviceFinder.sameDevice(device, session.currentDevice)) {
             FileLogger.log("Current UVC device detached — stopping cleanly")
             resumeStreamOnReattach = isStreaming || CaptureKeepAlive.wantStreaming(this)
@@ -341,15 +359,22 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
 
     override fun onPermissionResult(device: UsbDevice?, granted: Boolean) {
         permissionWaitDeviceName = null
-        val hasIt = device != null && usbManager.hasPermission(device)
-        if ((granted || hasIt) && device != null) {
+        // Pico flapping: permission callback can arrive after DETACH.
+        val live = device?.deviceName?.let { usbManager.deviceList[it] }
+        if (live == null) {
+            FileLogger.log("USB permission result ignored — device no longer connected")
+            pendingStartAfterPermission = false
+            notifyUi()
+            return
+        }
+        val hasIt = usbManager.hasPermission(live)
+        if ((granted || hasIt)) {
             val shouldStart =
                 pendingStartAfterPermission ||
                     CaptureKeepAlive.wantStreaming(this) ||
                     resumeStreamOnReattach
             pendingStartAfterPermission = false
-            // Re-enter prepareDevice so CAMERA / USB_CAMERA is checked (Quest).
-            prepareDevice(device, startStream = shouldStart)
+            prepareDevice(live, startStream = shouldStart)
         } else {
             pendingStartAfterPermission = false
             resumeStreamOnReattach = false
@@ -391,7 +416,12 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
             statusText = if (resumeStreamOnReattach) {
                 getString(R.string.status_device_detached)
             } else {
-                getString(R.string.status_no_device)
+                val rawCount = usbManager.deviceList.size
+                if (rawCount > 0) {
+                    getString(R.string.status_no_uvc_but_usb, rawCount)
+                } else {
+                    getString(R.string.status_no_device)
+                }
             }
             notifyUi()
             return
@@ -408,7 +438,20 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
             notifyUi()
             return
         }
-        prepareDevice(pickDevice() ?: uvcDevices.first(), startStream = wantStart)
+        val device = pickDevice() ?: uvcDevices.first()
+        // Pico: UsbPermissionActivity often hides our virtual display ("crash").
+        // Only request USB permission when opening/streaming, or when already granted.
+        when {
+            wantStart -> prepareDevice(device, startStream = true)
+            usbManager.hasPermission(device) -> prepareDevice(device, startStream = false)
+            else -> {
+                statusText = getString(
+                    R.string.status_uvc_listed,
+                    device.productName ?: device.deviceName,
+                )
+                notifyUi()
+            }
+        }
     }
 
     private fun pickDevice(): UsbDevice? {
@@ -421,6 +464,10 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
     }
 
     private fun prepareDevice(device: UsbDevice, startStream: Boolean) {
+        if (usbManager.deviceList[device.deviceName] == null) {
+            FileLogger.log("prepareDevice skipped — not in deviceList: ${device.deviceName}")
+            return
+        }
         if (UvcDeviceFinder.sameDevice(device, session.currentDevice) && session.isDeviceOpen) {
             if (startStream && !isStreaming) {
                 applySelectedMode()
@@ -439,6 +486,13 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
                 FileLogger.log("USB permission not ready for ${device.deviceName}, retry 300ms")
                 handler.removeCallbacks(permissionRetryRunnable)
                 handler.postDelayed(permissionRetryRunnable, 300L)
+                return
+            }
+            // Still present?
+            if (usbManager.deviceList[device.deviceName] == null) {
+                FileLogger.log("Skip USB permission dialog — device already gone")
+                permissionWaitDeviceName = null
+                permissionRetryDevice = null
                 return
             }
             FileLogger.log("Requesting USB permission for ${device.productName}")
@@ -600,14 +654,14 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
 
     private fun scheduleDeviceRefresh(preferDevice: UsbDevice?, forceAutoStream: Boolean) {
         handler.removeCallbacks(usbRetryRunnable)
+        pendingRefreshDevice = preferDevice
+        pendingRefreshAuto = forceAutoStream
         val delay = (suppressAutoOpenUntilMs - System.currentTimeMillis()).coerceAtLeast(0L)
         if (delay == 0L) {
             refreshDeviceList(preferDevice = preferDevice, forceAutoStream = forceAutoStream)
             return
         }
         FileLogger.log("Defer USB reopen ${delay}ms (hot-unplug settle)")
-        pendingRefreshDevice = preferDevice
-        pendingRefreshAuto = forceAutoStream
         handler.postDelayed(usbRetryRunnable, delay + 50L)
     }
 

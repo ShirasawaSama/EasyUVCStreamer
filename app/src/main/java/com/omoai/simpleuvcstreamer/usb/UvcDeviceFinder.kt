@@ -7,13 +7,55 @@ import com.omoai.simpleuvcstreamer.util.FileLogger
 
 object UvcDeviceFinder {
     private const val USB_CLASS_VIDEO = 14
+    private const val USB_CLASS_MISC = 239
+    private const val USB_MISC_SUBCLASS_IAD = 2
+    private const val USB_IAD_PROTOCOL_UVC = 1
 
     fun listUvcDevices(usbManager: UsbManager): List<UsbDevice> {
-        return usbManager.deviceList.values.filter { device ->
-            (0 until device.interfaceCount).any { i ->
-                device.getInterface(i).interfaceClass == USB_CLASS_VIDEO
+        val all = usbManager.deviceList.values.toList()
+        val uvc = all.filter { isLikelyUvc(it) }
+        if (uvc.isEmpty() && all.isNotEmpty()) {
+            // Rare: USB present but nothing looks like UVC / incomplete-descriptor candidate.
+            for (device in all) {
+                FileLogger.log(
+                    "USB non-UVC ${device.deviceName} " +
+                        "vid=${device.vendorId} pid=${device.productId} " +
+                        "name=${device.productName} " +
+                        "devClass=${device.deviceClass}/${device.deviceSubclass}/${device.deviceProtocol} " +
+                        "ifaces=${device.interfaceCount}"
+                )
             }
         }
+        return uvc
+    }
+
+    /**
+     * Match UVC by video class / UVC IAD, or by empty interface list.
+     *
+     * Pico Neo / Pico 3 / Pico 4 often expose [UsbDevice] with [UsbDevice.getInterfaceCount] == 0
+     * (incomplete Java-side descriptors). Quest / Pico 4 Ultra usually report class 14 normally.
+     * Native libusb can still parse configs from the fd after [UsbManager.openDevice].
+     */
+    fun isLikelyUvc(device: UsbDevice): Boolean {
+        if (device.interfaceCount == 0) return true
+        if (device.deviceClass == USB_CLASS_VIDEO) return true
+        if (device.deviceClass == USB_CLASS_MISC &&
+            device.deviceSubclass == USB_MISC_SUBCLASS_IAD &&
+            device.deviceProtocol == USB_IAD_PROTOCOL_UVC
+        ) {
+            return true
+        }
+        for (i in 0 until device.interfaceCount) {
+            val intf = device.getInterface(i)
+            if (intf.interfaceClass == USB_CLASS_VIDEO) return true
+            if (intf.interfaceClass == USB_CLASS_MISC &&
+                intf.interfaceSubclass == USB_MISC_SUBCLASS_IAD &&
+                intf.interfaceProtocol == USB_IAD_PROTOCOL_UVC
+            ) {
+                return true
+            }
+        }
+        return false
     }
 
     fun labelFor(device: UsbDevice): String {
