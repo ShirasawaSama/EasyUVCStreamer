@@ -33,12 +33,48 @@ std::vector<int> discrete_fps_list(const uvc_frame_desc_t *frame_desc) {
     return out;
 }
 
-std::vector<int> fps_for_size(uvc_device_handle_t *devh, int width, int height) {
+uvc_frame_format to_uvc_format(StreamPixelFormat format) {
+    switch (format) {
+        case StreamPixelFormat::Yuyv:
+            return UVC_FRAME_FORMAT_YUYV;
+        case StreamPixelFormat::Uyvy:
+            return UVC_FRAME_FORMAT_UYVY;
+        case StreamPixelFormat::Mjpeg:
+        default:
+            return UVC_FRAME_FORMAT_MJPEG;
+    }
+}
+
+bool format_matches_desc(StreamPixelFormat format, const uvc_format_desc_t *format_desc) {
+    if (format == StreamPixelFormat::Mjpeg) {
+        return format_desc->bDescriptorSubtype == UVC_VS_FORMAT_MJPEG;
+    }
+    if (format_desc->bDescriptorSubtype != UVC_VS_FORMAT_UNCOMPRESSED) {
+        return false;
+    }
+    const char a = static_cast<char>(format_desc->fourccFormat[0]);
+    const char b = static_cast<char>(format_desc->fourccFormat[1]);
+    const char c = static_cast<char>(format_desc->fourccFormat[2]);
+    const char d = static_cast<char>(format_desc->fourccFormat[3]);
+    const bool yuy2 =
+            (a == 'Y' && b == 'U' && c == 'Y' && d == '2') ||
+            (a == 'Y' && b == 'U' && c == 'Y' && d == 'V');
+    const bool uyvy = (a == 'U' && b == 'Y' && c == 'V' && d == 'Y');
+    if (format == StreamPixelFormat::Yuyv) return yuy2;
+    if (format == StreamPixelFormat::Uyvy) return uyvy;
+    return false;
+}
+
+std::vector<int> fps_for_size(
+        uvc_device_handle_t *devh,
+        StreamPixelFormat format,
+        int width,
+        int height) {
     std::set<int> seen;
     std::vector<int> out;
     const uvc_format_desc_t *format_desc = uvc_get_format_descs(devh);
     while (format_desc) {
-        if (format_desc->bDescriptorSubtype == UVC_VS_FORMAT_MJPEG) {
+        if (format_matches_desc(format, format_desc)) {
             const uvc_frame_desc_t *frame_desc = format_desc->frame_descs;
             while (frame_desc) {
                 if (frame_desc->wWidth == width && frame_desc->wHeight == height) {
@@ -57,49 +93,50 @@ std::vector<int> fps_for_size(uvc_device_handle_t *devh, int width, int height) 
 uvc_error_t try_format_size(
         uvc_device_handle_t *devh,
         uvc_stream_ctrl_t *ctrl,
+        StreamPixelFormat format,
         int width,
         int height,
         int fps) {
     uvc_error_t res = uvc_get_stream_ctrl_format_size(
-            devh, ctrl, UVC_FRAME_FORMAT_MJPEG, width, height, fps);
+            devh, ctrl, to_uvc_format(format), width, height, fps);
     if (res == UVC_SUCCESS) {
-        LOGI("negotiate OK %dx%d @%dfps if=%u interval=%u maxFrame=%u maxPayload=%u",
-             width, height, fps,
+        LOGI("negotiate OK fmt=%d %dx%d @%dfps if=%u interval=%u maxFrame=%u maxPayload=%u",
+             static_cast<int>(format), width, height, fps,
              ctrl->bInterfaceNumber, ctrl->dwFrameInterval,
              ctrl->dwMaxVideoFrameSize, ctrl->dwMaxPayloadTransferSize);
     } else {
-        LOGI("negotiate %dx%d @%dfps failed: %d", width, height, fps, res);
+        LOGI("negotiate fmt=%d %dx%d @%dfps failed: %d",
+             static_cast<int>(format), width, height, fps, res);
     }
     return res;
 }
 
 }  // namespace
 
-uvc_error_t get_mjpeg_stream_ctrl(
+uvc_error_t get_stream_ctrl(
         uvc_device_handle_t *devh,
         uvc_stream_ctrl_t *ctrl,
+        StreamPixelFormat format,
         int width,
         int height,
         int prefer_fps) {
-    // libuvc must fill the probe block (max frame/payload). A hand-rolled
-    // uvc_probe_stream_ctrl with only format/frame/interval returns -51.
-    if (try_format_size(devh, ctrl, width, height, prefer_fps) == UVC_SUCCESS) {
+    if (try_format_size(devh, ctrl, format, width, height, prefer_fps) == UVC_SUCCESS) {
         return UVC_SUCCESS;
     }
 
-    auto fps_list = fps_for_size(devh, width, height);
-    std::sort(fps_list.begin(), fps_list.end());  // lower fps first (USB bandwidth)
+    auto fps_list = fps_for_size(devh, format, width, height);
+    std::sort(fps_list.begin(), fps_list.end());
     uvc_error_t last = UVC_ERROR_INVALID_MODE;
     for (int fps : fps_list) {
         if (fps == prefer_fps) continue;
-        last = try_format_size(devh, ctrl, width, height, fps);
+        last = try_format_size(devh, ctrl, format, width, height, fps);
         if (last == UVC_SUCCESS) return UVC_SUCCESS;
     }
 
-    // Some libuvc builds treat fps=0 as "any advertised interval".
-    last = try_format_size(devh, ctrl, width, height, 0);
+    last = try_format_size(devh, ctrl, format, width, height, 0);
     if (last == UVC_SUCCESS) return UVC_SUCCESS;
 
-    LOGE("get_mjpeg_stream_ctrl: no mode for %dx%d @~%dfps", width, height, prefer_fps);
+    LOGE("get_stream_ctrl: no mode for fmt=%d %dx%d @~%dfps",
+         static_cast<int>(format), width, height, prefer_fps);
     return last < 0 ? last : UVC_ERROR_INVALID_MODE;
 }

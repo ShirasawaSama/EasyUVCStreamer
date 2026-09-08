@@ -36,10 +36,19 @@ Java_com_omoai_simpleuvcstreamer_uvc_UvcNative_nativeClose(JNIEnv *env, jobject 
 
 JNIEXPORT jint JNICALL
 Java_com_omoai_simpleuvcstreamer_uvc_UvcNative_nativeStartStream(
-        JNIEnv *env, jobject thiz, jint width, jint height, jint fps) {
-    (void) env;
+        JNIEnv *env, jobject thiz, jint width, jint height, jint fps, jstring format) {
     (void) thiz;
-    return uvc_engine::start_stream(width, height, fps);
+    const char *fmt = "mjpeg";
+    const char *utf = nullptr;
+    if (format) {
+        utf = env->GetStringUTFChars(format, nullptr);
+        if (utf) fmt = utf;
+    }
+    const int res = uvc_engine::start_stream(width, height, fps, fmt);
+    if (utf) {
+        env->ReleaseStringUTFChars(format, utf);
+    }
+    return res;
 }
 
 JNIEXPORT jint JNICALL

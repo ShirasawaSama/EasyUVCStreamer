@@ -9,7 +9,7 @@ int init();
 int open_device(int fd);
 void stop_stream();
 void close_device();
-int start_stream(int width, int height, int fps);
+int start_stream(int width, int height, int fps, const char *format);
 int get_frame_count();
 std::string get_resolutions();
 

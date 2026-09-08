@@ -46,13 +46,15 @@
     <string name="status_waiting_camera_permission">请先允许摄像头权限，再打开 USB 摄像头</string>
     <string name="status_permission_denied">USB 授权被拒绝</string>
     <string name="status_open_failed">打开设备失败</string>
-    <string name="status_no_mjpeg">该设备不支持 MJPEG</string>
+    <string name="status_no_stream_format">该设备没有可用的 MJPEG / YUV 格式</string>
     <string name="status_resolutions_ready">已就绪 · %1$d 种分辨率</string>
     <string name="status_device_detached">摄像头已断开 · 等待重新连接</string>
     <string name="status_select_resolution">请先选择分辨率</string>
     <string name="status_select_fps">请先选择帧率</string>
     <string name="status_streaming">采集中 · %1$dx%2$d · %3$d fps</string>
+    <string name="status_streaming_yuv">采集中 · %1$dx%2$d · %3$d fps · YUV→MJPEG</string>
     <string name="status_streaming_fallback">采集中（已回退）· %1$dx%2$d · %3$d fps</string>
+    <string name="status_streaming_fallback_yuv">采集中（已回退）· %1$dx%2$d · %3$d fps · YUV→MJPEG</string>
     <string name="status_stream_error">采集失败 · %1$d（%2$dx%3$d · %4$d fps）</string>
     <string name="status_idle">已停止采集</string>
     <string name="status_bad_port">端口无效（1–65535）</string>

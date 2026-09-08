@@ -2,6 +2,7 @@
   "dependencies": [
     "libuvc",
     "libusb",
-    "libhv"
+    "libhv",
+    "libjpeg-turbo"
   ]
 }

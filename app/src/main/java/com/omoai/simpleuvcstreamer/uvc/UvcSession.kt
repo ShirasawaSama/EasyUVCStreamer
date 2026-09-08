@@ -9,8 +9,8 @@ import com.omoai.simpleuvcstreamer.util.FileLogger
 /**
  * Owns USB connection + native device handle lifecycle.
  *
- * Main-line: raw MJPEG from camera (no decode) — intended for low-latency HTTP push later.
- * Preview/UI decode is opt-in via [com.omoai.simpleuvcstreamer.preview.FramePreviewController].
+ * Main-line: camera MJPEG when available; otherwise YUV encoded to JPEG (turbojpeg)
+ * for HTTP push. Preview decode is opt-in via [FramePreviewController].
  */
 class UvcSession(private val usbManager: UsbManager) {
 
@@ -79,10 +79,10 @@ class UvcSession(private val usbManager: UsbManager) {
         }
     }
 
-    fun startStream(width: Int, height: Int, fps: Int): Int {
-        FileLogger.log("Starting/switching stream to ${width}x${height} @${fps}fps")
+    fun startStream(width: Int, height: Int, fps: Int, format: String): Int {
+        FileLogger.log("Starting/switching stream to ${width}x${height} @${fps}fps fmt=$format")
         val startRes = try {
-            UvcNative.nativeStartStream(width, height, fps)
+            UvcNative.nativeStartStream(width, height, fps, format)
         } catch (t: Throwable) {
             FileLogger.log("nativeStartStream threw: ${t.message}")
             isStreaming = false

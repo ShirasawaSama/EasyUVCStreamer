@@ -11,11 +11,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <set>
 #include <sstream>
+#include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 #include <algorithm>
 
@@ -171,16 +174,27 @@ void close_device() {
     close_handle_unlocked();
 }
 
-int start_stream(int width, int height, int fps) {
+int start_stream(int width, int height, int fps, const char *format) {
     std::lock_guard<std::mutex> lock(g_dev_mu);
     if (!g_devh) return -1;
 
     stop_streaming_unlocked();
 
+    StreamPixelFormat pixel = StreamPixelFormat::Mjpeg;
+    if (format) {
+        if (std::strcmp(format, "yuyv") == 0) {
+            pixel = StreamPixelFormat::Yuyv;
+        } else if (std::strcmp(format, "uyvy") == 0) {
+            pixel = StreamPixelFormat::Uyvy;
+        } else {
+            pixel = StreamPixelFormat::Mjpeg;
+        }
+    }
+
     uvc_stream_ctrl_t ctrl{};
-    uvc_error_t res = get_mjpeg_stream_ctrl(g_devh, &ctrl, width, height, fps);
+    uvc_error_t res = get_stream_ctrl(g_devh, &ctrl, pixel, width, height, fps);
     if (res < 0) {
-        LOGE("Failed to find MJPEG format/size: %d", res);
+        LOGE("Failed to find stream format/size fmt=%s: %d", format ? format : "mjpeg", res);
         return res;
     }
 
@@ -192,7 +206,8 @@ int start_stream(int width, int height, int fps) {
         LOGE("uvc_start_streaming failed: %d", res);
         g_is_streaming.store(false, std::memory_order_release);
     } else {
-        LOGI("nativeStartStream: Streaming %dx%d if=%u interval=%u maxPayload=%u",
+        LOGI("nativeStartStream: Streaming %s %dx%d if=%u interval=%u maxPayload=%u",
+             format ? format : "mjpeg",
              width, height, ctrl.bInterfaceNumber, ctrl.dwFrameInterval, ctrl.dwMaxPayloadTransferSize);
     }
     return (int) res;
@@ -203,7 +218,8 @@ int get_frame_count() {
 }
 
 std::string get_resolutions() {
-    // Wire: WxH|fps1,fps2|defaultFps|isDeviceDefault;
+    // Wire: WxH|fps1,fps2|defaultFps|isDeviceDefault|format;
+    // format = mjpeg | yuyv | uyvy. If any MJPEG exists, only MJPEG modes are returned.
     std::lock_guard<std::mutex> lock(g_dev_mu);
     if (!g_devh) return "";
 
@@ -216,75 +232,121 @@ std::string get_resolutions() {
         std::set<int> fps;
         int default_fps = 0;
         bool device_default = false;
+        const char *format = "mjpeg";
     };
 
-    std::map<std::pair<int, int>, ModeAgg> modes;
+    auto fourcc_tag = [](const uvc_format_desc_t *format_desc) -> const char * {
+        const char a = static_cast<char>(format_desc->fourccFormat[0]);
+        const char b = static_cast<char>(format_desc->fourccFormat[1]);
+        const char c = static_cast<char>(format_desc->fourccFormat[2]);
+        const char d = static_cast<char>(format_desc->fourccFormat[3]);
+        if ((a == 'Y' && b == 'U' && c == 'Y' && d == '2') ||
+            (a == 'Y' && b == 'U' && c == 'Y' && d == 'V')) {
+            return "yuyv";
+        }
+        if (a == 'U' && b == 'Y' && c == 'V' && d == 'Y') {
+            return "uyvy";
+        }
+        return nullptr;
+    };
+
+    using Key = std::tuple<int, int, std::string>;
+    std::map<Key, ModeAgg> modes;
 
     const uvc_format_desc_t *format_desc = uvc_get_format_descs(g_devh);
     while (format_desc) {
+        const char *fmt = nullptr;
         if (format_desc->bDescriptorSubtype == UVC_VS_FORMAT_MJPEG) {
-            const uvc_frame_desc_t *frame_desc = format_desc->frame_descs;
-            while (frame_desc) {
-                auto key = std::make_pair(
-                        static_cast<int>(frame_desc->wWidth),
-                        static_cast<int>(frame_desc->wHeight));
-                ModeAgg &agg = modes[key];
+            fmt = "mjpeg";
+        } else if (format_desc->bDescriptorSubtype == UVC_VS_FORMAT_UNCOMPRESSED) {
+            fmt = fourcc_tag(format_desc);
+        }
+        if (!fmt) {
+            format_desc = format_desc->next;
+            continue;
+        }
 
-                if (frame_desc->intervals) {
-                    for (uint32_t *interval = frame_desc->intervals; *interval; ++interval) {
-                        int fps = interval_to_fps(*interval);
-                        if (fps > 0) agg.fps.insert(fps);
-                    }
-                } else {
-                    auto add_fps = [&](uint32_t interval) {
-                        int fps = interval_to_fps(interval);
-                        if (fps > 0) agg.fps.insert(fps);
-                    };
-                    add_fps(frame_desc->dwDefaultFrameInterval);
-                    add_fps(frame_desc->dwMinFrameInterval);
-                    add_fps(frame_desc->dwMaxFrameInterval);
+        const uvc_frame_desc_t *frame_desc = format_desc->frame_descs;
+        while (frame_desc) {
+            Key key{
+                    static_cast<int>(frame_desc->wWidth),
+                    static_cast<int>(frame_desc->wHeight),
+                    std::string(fmt)};
+            ModeAgg &agg = modes[key];
+            agg.format = fmt;
+
+            if (frame_desc->intervals) {
+                for (uint32_t *interval = frame_desc->intervals; *interval; ++interval) {
+                    int fps = interval_to_fps(*interval);
+                    if (fps > 0) agg.fps.insert(fps);
                 }
+            } else {
+                auto add_fps = [&](uint32_t interval) {
+                    int fps = interval_to_fps(interval);
+                    if (fps > 0) agg.fps.insert(fps);
+                };
+                add_fps(frame_desc->dwDefaultFrameInterval);
+                add_fps(frame_desc->dwMinFrameInterval);
+                add_fps(frame_desc->dwMaxFrameInterval);
+            }
 
-                const int advertised_default =
-                        interval_to_fps(frame_desc->dwDefaultFrameInterval);
-                if (advertised_default > 0 && agg.fps.count(advertised_default) &&
-                    agg.default_fps == 0) {
+            const int advertised_default =
+                    interval_to_fps(frame_desc->dwDefaultFrameInterval);
+            if (advertised_default > 0 && agg.fps.count(advertised_default) &&
+                agg.default_fps == 0) {
+                agg.default_fps = advertised_default;
+            }
+
+            const bool is_default_frame =
+                    frame_desc->bFrameIndex == format_desc->bDefaultFrameIndex;
+            if (is_default_frame) {
+                agg.device_default = true;
+                if (advertised_default > 0 && agg.fps.count(advertised_default)) {
                     agg.default_fps = advertised_default;
                 }
-
-                const bool is_default_frame =
-                        frame_desc->bFrameIndex == format_desc->bDefaultFrameIndex;
-                if (is_default_frame) {
-                    agg.device_default = true;
-                    if (advertised_default > 0 && agg.fps.count(advertised_default)) {
-                        agg.default_fps = advertised_default;
-                    }
-                }
-
-                frame_desc = frame_desc->next;
             }
+
+            frame_desc = frame_desc->next;
         }
         format_desc = format_desc->next;
     }
 
-    std::vector<std::pair<std::pair<int, int>, ModeAgg>> ordered(modes.begin(), modes.end());
+    bool has_mjpeg = false;
+    for (const auto &entry : modes) {
+        if (std::get<2>(entry.first) == "mjpeg") {
+            has_mjpeg = true;
+            break;
+        }
+    }
+
+    std::vector<std::pair<Key, ModeAgg>> ordered;
+    ordered.reserve(modes.size());
+    for (const auto &entry : modes) {
+        if (has_mjpeg && std::get<2>(entry.first) != "mjpeg") {
+            continue;
+        }
+        ordered.push_back(entry);
+    }
+
     std::sort(ordered.begin(), ordered.end(), [](const auto &a, const auto &b) {
-        const int pa = a.first.first * a.first.second;
-        const int pb = b.first.first * b.first.second;
+        const int pa = std::get<0>(a.first) * std::get<1>(a.first);
+        const int pb = std::get<0>(b.first) * std::get<1>(b.first);
         if (pa != pb) return pa > pb;
-        return a.first.first > b.first.first;
+        if (std::get<0>(a.first) != std::get<0>(b.first)) {
+            return std::get<0>(a.first) > std::get<0>(b.first);
+        }
+        return std::get<2>(a.first) < std::get<2>(b.first);
     });
 
     std::stringstream ss;
-    for (const auto &entry : ordered) {
-        const int w = entry.first.first;
-        const int h = entry.first.second;
-        ModeAgg agg = entry.second;
+    for (auto &entry : ordered) {
+        const int w = std::get<0>(entry.first);
+        const int h = std::get<1>(entry.first);
+        ModeAgg &agg = entry.second;
         if (agg.fps.empty()) {
             agg.fps.insert(30);
         }
         if (agg.default_fps == 0 || agg.fps.count(agg.default_fps) == 0) {
-            // Prefer the lowest advertised rate — more likely to fit USB isoch.
             agg.default_fps = *agg.fps.begin();
         }
 
@@ -295,9 +357,10 @@ std::string get_resolutions() {
             ss << *it;
             first = false;
         }
-        ss << "|" << agg.default_fps << "|" << (agg.device_default ? 1 : 0) << ";";
-        LOGI("mode %dx%d fps={default=%d deviceDefault=%d}",
-             w, h, agg.default_fps, agg.device_default ? 1 : 0);
+        ss << "|" << agg.default_fps << "|" << (agg.device_default ? 1 : 0)
+           << "|" << agg.format << ";";
+        LOGI("mode %dx%d fmt=%s fps={default=%d deviceDefault=%d}",
+             w, h, agg.format, agg.default_fps, agg.device_default ? 1 : 0);
     }
     return ss.str();
 }

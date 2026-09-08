@@ -22,6 +22,7 @@ project(simpleuvcstreamer)
 
 find_package(libuvc CONFIG REQUIRED)
 find_package(libhv CONFIG REQUIRED)
+find_package(libjpeg-turbo CONFIG REQUIRED)
 
 # vcpkg Android builds libhv as static → imported target is hv_static (not hv).
 if(TARGET hv_static)
@@ -34,12 +35,21 @@ else()
     message(FATAL_ERROR "libhv CMake target not found (expected hv_static or hv)")
 endif()
 
+if(TARGET libjpeg-turbo::turbojpeg-static)
+    set(TURBOJPEG_TARGET libjpeg-turbo::turbojpeg-static)
+elseif(TARGET libjpeg-turbo::turbojpeg)
+    set(TURBOJPEG_TARGET libjpeg-turbo::turbojpeg)
+else()
+    message(FATAL_ERROR "libjpeg-turbo turbojpeg target not found")
+endif()
+
 add_library(${CMAKE_PROJECT_NAME} SHARED
     jni_bridge.cpp
     uvc_engine.cpp
     stream_negotiate.cpp
     frame_pipeline.cpp
     http_mjpeg_server.cpp
+    jpeg_encode.cpp
 )
 
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
@@ -48,4 +58,5 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
     PkgConfig::libusb
     $<IF:$<TARGET_EXISTS:LibUVC::UVCStatic>,LibUVC::UVCStatic,LibUVC::UVCShared>
     ${HV_TARGET}
+    ${TURBOJPEG_TARGET}
 )

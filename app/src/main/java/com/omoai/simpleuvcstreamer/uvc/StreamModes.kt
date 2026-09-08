@@ -1,10 +1,11 @@
 package com.omoai.simpleuvcstreamer.uvc
 
 /**
- * One MJPEG resolution and the frame rates advertised for it.
+ * One streamable resolution and the frame rates advertised for it.
  *
  * Wire format from native:
- * `WxH|fps1,fps2|defaultFps|isDeviceDefault;...`
+ * `WxH|fps1,fps2|defaultFps|isDeviceDefault|format;...`
+ * format = mjpeg | yuyv | uyvy. Native omits YUV when any MJPEG exists.
  */
 data class StreamMode(
     val width: Int,
@@ -12,8 +13,27 @@ data class StreamMode(
     val fpsList: List<Int>,
     val defaultFps: Int,
     val isDeviceDefault: Boolean,
+    val format: PixelFormat = PixelFormat.MJPEG,
 ) {
-    val sizeLabel: String get() = "${width}x${height}"
+    enum class PixelFormat(val wire: String, val isYuv: Boolean) {
+        MJPEG("mjpeg", false),
+        YUYV("yuyv", true),
+        UYVY("uyvy", true);
+
+        companion object {
+            fun fromWire(raw: String?): PixelFormat {
+                return when (raw?.lowercase()) {
+                    "yuyv" -> YUYV
+                    "uyvy" -> UYVY
+                    else -> MJPEG
+                }
+            }
+        }
+    }
+
+    /** Resolution label; appends " · YUV" only for uncompressed modes. */
+    val sizeLabel: String
+        get() = if (format.isYuv) "${width}x${height} · YUV" else "${width}x${height}"
 
     fun fpsLabels(): List<String> = fpsList.map { "$it fps" }
 
@@ -51,12 +71,14 @@ data class StreamMode(
             val defaultFps = parts[2].toIntOrNull()?.takeIf { it > 0 }
                 ?: fpsList.first()
             val isDefault = parts[3].trim() == "1"
+            val format = PixelFormat.fromWire(parts.getOrNull(4)?.trim())
             return StreamMode(
                 width = w,
                 height = h,
                 fpsList = fpsList,
                 defaultFps = if (fpsList.contains(defaultFps)) defaultFps else fpsList.first(),
                 isDeviceDefault = isDefault,
+                format = format,
             )
         }
 
@@ -67,7 +89,7 @@ data class StreamMode(
                 "1280x720", "960x540", "800x600", "640x480", "640x360", "320x240"
             )
             for (p in preferred) {
-                val idx = modes.indexOfFirst { it.sizeLabel == p }
+                val idx = modes.indexOfFirst { "${it.width}x${it.height}" == p }
                 if (idx >= 0) return idx
             }
             return modes.lastIndex.coerceAtLeast(0)

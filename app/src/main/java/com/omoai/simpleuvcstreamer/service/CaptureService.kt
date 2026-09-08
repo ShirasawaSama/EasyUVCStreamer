@@ -525,7 +525,7 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
             selectedMode = null
             selectedFps = 0
             CaptureKeepAlive.setWantStreaming(this, false)
-            statusText = getString(R.string.status_no_mjpeg)
+            statusText = getString(R.string.status_no_stream_format)
             notifyUi()
             return
         }
@@ -587,7 +587,12 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
 
         var lastRes = -1
         for ((attempt, attemptFps) in streamAttempts(mode, fps)) {
-            lastRes = session.startStream(attempt.width, attempt.height, attemptFps)
+            lastRes = session.startStream(
+                attempt.width,
+                attempt.height,
+                attemptFps,
+                attempt.format.wire,
+            )
             if (lastRes != 0) continue
             val fallback =
                 attempt.width != mode.width ||
@@ -602,7 +607,18 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
             CaptureKeepAlive.setWantStreaming(this, true)
             locks.acquire()
             statusText = if (fallback) {
-                getString(R.string.status_streaming_fallback, attempt.width, attempt.height, attemptFps)
+                if (attempt.format.isYuv) {
+                    getString(
+                        R.string.status_streaming_fallback_yuv,
+                        attempt.width,
+                        attempt.height,
+                        attemptFps,
+                    )
+                } else {
+                    getString(R.string.status_streaming_fallback, attempt.width, attempt.height, attemptFps)
+                }
+            } else if (attempt.format.isYuv) {
+                getString(R.string.status_streaming_yuv, attempt.width, attempt.height, attemptFps)
             } else {
                 getString(R.string.status_streaming, attempt.width, attempt.height, attemptFps)
             }
@@ -624,14 +640,17 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
         val seen = linkedSetOf<String>()
         val out = mutableListOf<Pair<StreamMode, Int>>()
         fun add(m: StreamMode, f: Int) {
-            val key = "${m.width}x${m.height}@$f"
+            val key = "${m.format.wire}:${m.width}x${m.height}@$f"
             if (!seen.add(key)) return
             out.add(m to f)
         }
         add(mode, fps)
         mode.fpsList.sorted().forEach { add(mode, it) }
         streamModes
-            .filter { it.width != mode.width || it.height != mode.height }
+            .filter {
+                it.format == mode.format &&
+                    (it.width != mode.width || it.height != mode.height)
+            }
             .sortedBy { it.width * it.height }
             .forEach { other ->
                 add(other, other.defaultFps)

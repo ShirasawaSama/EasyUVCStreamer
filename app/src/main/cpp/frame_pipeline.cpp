@@ -1,5 +1,6 @@
 #include "frame_pipeline.h"
 
+#include "jpeg_encode.h"
 #include "log.h"
 
 #include <atomic>
@@ -24,6 +25,9 @@ std::vector<uint8_t> g_http_jpeg;
 uint64_t g_http_seq = 0;
 bool g_http_has = false;
 
+// Reused RGB/JPEG scratch for YUV encode path (callback thread only).
+thread_local std::vector<uint8_t> t_jpeg_scratch;
+
 void replace_slot(std::mutex &mu,
                   std::vector<uint8_t> &buf,
                   bool &has,
@@ -39,16 +43,47 @@ void replace_slot(std::mutex &mu,
     }
 }
 
+bool encode_to_jpeg(uvc_frame_t *frame, std::vector<uint8_t> &out) {
+    if (!frame || !frame->data || frame->data_bytes == 0) return false;
+    if (frame->frame_format == UVC_FRAME_FORMAT_MJPEG) {
+        out.assign(
+                static_cast<const uint8_t *>(frame->data),
+                static_cast<const uint8_t *>(frame->data) + frame->data_bytes);
+        return !out.empty();
+    }
+    if (frame->frame_format == UVC_FRAME_FORMAT_YUYV) {
+        out = jpeg_encode::yuyv_to_jpeg(
+                static_cast<const uint8_t *>(frame->data),
+                frame->data_bytes,
+                static_cast<int>(frame->width),
+                static_cast<int>(frame->height),
+                frame->step);
+        return !out.empty();
+    }
+    if (frame->frame_format == UVC_FRAME_FORMAT_UYVY) {
+        out = jpeg_encode::uyvy_to_jpeg(
+                static_cast<const uint8_t *>(frame->data),
+                frame->data_bytes,
+                static_cast<int>(frame->width),
+                static_cast<int>(frame->height),
+                frame->step);
+        return !out.empty();
+    }
+    return false;
+}
+
 }  // namespace
 
 void on_frame(uvc_frame_t *frame) {
     g_frame_count.fetch_add(1, std::memory_order_relaxed);
     int n = g_callback_seq.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n == 1 || n % 30 == 0) {
-        LOGI("frame #%d size=%zu fmt=%d",
+        LOGI("frame #%d size=%zu fmt=%d %ux%u",
              n,
              frame ? frame->data_bytes : 0,
-             frame ? (int) frame->frame_format : -1);
+             frame ? (int) frame->frame_format : -1,
+             frame ? frame->width : 0,
+             frame ? frame->height : 0);
     }
 
     const bool want_http = g_http_subscribers.load(std::memory_order_relaxed) > 0;
@@ -56,20 +91,17 @@ void on_frame(uvc_frame_t *frame) {
     if (!want_http && !want_preview) {
         return;
     }
-    if (!frame || !frame->data || frame->data_bytes == 0) {
-        return;
-    }
-    if (frame->frame_format != UVC_FRAME_FORMAT_MJPEG) {
+    if (!encode_to_jpeg(frame, t_jpeg_scratch) || t_jpeg_scratch.empty()) {
         return;
     }
 
     if (want_http) {
         replace_slot(g_http_mu, g_http_jpeg, g_http_has, &g_http_seq,
-                     frame->data, frame->data_bytes);
+                     t_jpeg_scratch.data(), t_jpeg_scratch.size());
     }
     if (want_preview) {
         replace_slot(g_preview_mu, g_latest_jpeg, g_has_latest, nullptr,
-                     frame->data, frame->data_bytes);
+                     t_jpeg_scratch.data(), t_jpeg_scratch.size());
     }
 }
 
@@ -113,7 +145,6 @@ void http_subscriber_remove() {
         std::lock_guard<std::mutex> lock(g_http_mu);
         g_http_jpeg.clear();
         g_http_has = false;
-        // keep seq monotonic
     }
 }
 

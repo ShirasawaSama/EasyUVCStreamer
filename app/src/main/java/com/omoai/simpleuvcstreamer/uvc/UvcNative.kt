@@ -20,7 +20,7 @@ object UvcNative {
     external fun nativeInit(): Int
     external fun nativeOpenDevice(fd: Int): Int
     external fun nativeGetResolutions(): String
-    external fun nativeStartStream(width: Int, height: Int, fps: Int): Int
+    external fun nativeStartStream(width: Int, height: Int, fps: Int, format: String): Int
     external fun nativeStopStream()
     external fun nativeGetFrameCount(): Int
     external fun nativeClose()
