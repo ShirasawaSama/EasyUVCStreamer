@@ -14,7 +14,11 @@ object DeviceHistory {
 
     const val MAX_ENTRIES = 50
 
-    private const val PREFS = "device_history_v1"
+    /**
+     * v2: the default mode picker changed (no longer adopts a camera's tiny+fast
+     * "device default" like 320x240@120), so stale v1 memories are dropped once.
+     */
+    private const val PREFS = "device_history_v2"
     private const val KEY_ENTRIES = "entries"
 
     data class Choice(val width: Int, val height: Int, val fps: Int)

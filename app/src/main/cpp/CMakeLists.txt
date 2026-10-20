@@ -20,6 +20,11 @@ endif()
 
 project(simpleuvcstreamer)
 
+# Generic lambdas / in-class member initialisers / thread_local scratch buffers
+# all need at least C++14; pin it so the ABI/toolchain default can't surprise us.
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 find_package(libuvc CONFIG REQUIRED)
 find_package(libhv CONFIG REQUIRED)
 find_package(libjpeg-turbo CONFIG REQUIRED)

@@ -551,7 +551,9 @@ class CaptureService : Service(), UsbDeviceMonitor.Listener {
                 remembered.width == mode.width &&
                 remembered.height == mode.height &&
                 mode.fpsList.contains(remembered.fps) -> remembered.fps
-            else -> mode.defaultFps
+            // Do not adopt a camera's "device default" frame rate blindly: it can be
+            // 120fps at some tiny resolution. Aim at ~30fps unless the user picked one.
+            else -> mode.nearestFps(StreamMode.DEFAULT_STREAM_FPS)
         }
         if (remembered != null && rememberedIdx != null) {
             FileLogger.log(

@@ -186,9 +186,7 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
         tvHttpNoUrls = findViewById(R.id.tvHttpNoUrls)
         findViewById<TextView>(R.id.tvQqGroup).setOnClickListener { copyQqGroup() }
 
-        previewController = FramePreviewController(imagePreview) {
-            capture?.isStreaming == true
-        }
+        previewController = FramePreviewController(imagePreview)
 
         if (!UvcNative.isLibLoaded) {
             updateStatus(getString(R.string.status_lib_missing))
@@ -235,8 +233,10 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
         }
 
         switchBattery.setOnCheckedChangeListener { _, checked ->
-            if (checked == BatteryKeepAlive.isExempt(this)) return@setOnCheckedChangeListener
-            BatteryKeepAlive.openExemptionUi(this)
+            BatteryKeepAlive.setWanted(this, checked)
+            if (checked && !BatteryKeepAlive.isExempt(this)) {
+                BatteryKeepAlive.openExemptionUi(this)
+            }
             fpsHandler.post { syncBatterySwitch() }
         }
 
@@ -304,7 +304,9 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
             waitingCamera
         if (!wantsKeepAlive) return
         if (AppPermissions.missing(this).isEmpty() &&
-            (BatteryKeepAlive.isExempt(this) || batterySkippedThisSession)
+            (BatteryKeepAlive.isExempt(this) ||
+                batterySkippedThisSession ||
+                !BatteryKeepAlive.isWanted(this))
         ) {
             return
         }
@@ -316,7 +318,9 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
 
     private fun ensureKeepAliveThen(after: () -> Unit) {
         val missing = AppPermissions.missing(this)
-        val needBattery = !BatteryKeepAlive.isExempt(this) && !batterySkippedThisSession
+        val needBattery = BatteryKeepAlive.isWanted(this) &&
+            !BatteryKeepAlive.isExempt(this) &&
+            !batterySkippedThisSession
         if (missing.isEmpty() && !needBattery) {
             after()
             return
@@ -369,6 +373,7 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
 
     private fun continueKeepAliveAfterPermissions() {
         val needBattery = pendingBatteryAfterPerms &&
+            BatteryKeepAlive.isWanted(this) &&
             !BatteryKeepAlive.isExempt(this) &&
             !batterySkippedThisSession
         pendingBatteryAfterPerms = false
@@ -695,13 +700,15 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
     }
 
     private fun syncBatterySwitch() {
-        val exempt = BatteryKeepAlive.isExempt(this)
-        if (switchBattery.isChecked == exempt) return
+        val on = BatteryKeepAlive.isWanted(this) && BatteryKeepAlive.isExempt(this)
+        if (switchBattery.isChecked == on) return
         switchBattery.setOnCheckedChangeListener(null)
-        switchBattery.isChecked = exempt
+        switchBattery.isChecked = on
         switchBattery.setOnCheckedChangeListener { _, checked ->
-            if (checked == BatteryKeepAlive.isExempt(this)) return@setOnCheckedChangeListener
-            BatteryKeepAlive.openExemptionUi(this)
+            BatteryKeepAlive.setWanted(this, checked)
+            if (checked && !BatteryKeepAlive.isExempt(this)) {
+                BatteryKeepAlive.openExemptionUi(this)
+            }
             fpsHandler.post { syncBatterySwitch() }
         }
     }

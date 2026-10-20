@@ -82,9 +82,18 @@ data class StreamMode(
             )
         }
 
+        /** Frame rate we aim for when picking a default mode. */
+        const val DEFAULT_STREAM_FPS = 30
+
+        /**
+         * Best default mode for *streaming*, which is not always the camera's own
+         * default frame: several UVC cameras advertise a tiny-but-fast default
+         * (e.g. 320x240@120), and streaming that floods the USB bus and the
+         * PC-side JPEG decoder for no visual benefit. Prefer a sane resolution
+         * and fall back to the device default only when none of them exist.
+         */
         fun preferredIndex(modes: List<StreamMode>): Int {
-            val deviceIdx = modes.indexOfFirst { it.isDeviceDefault }
-            if (deviceIdx >= 0) return deviceIdx
+            if (modes.isEmpty()) return -1
             val preferred = listOf(
                 "1280x720", "960x540", "800x600", "640x480", "640x360", "320x240"
             )
@@ -92,7 +101,8 @@ data class StreamMode(
                 val idx = modes.indexOfFirst { "${it.width}x${it.height}" == p }
                 if (idx >= 0) return idx
             }
-            return modes.lastIndex.coerceAtLeast(0)
+            val deviceIdx = modes.indexOfFirst { it.isDeviceDefault }
+            return if (deviceIdx >= 0) deviceIdx else modes.lastIndex.coerceAtLeast(0)
         }
 
         fun deviceDefault(modes: List<StreamMode>): StreamMode? {
