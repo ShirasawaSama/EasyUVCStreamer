@@ -83,4 +83,11 @@
     <string name="notify_waiting">正在开始…</string>
     <string name="notify_waiting_reconnect">摄像头已拔出 · 等待重新插上</string>
     <string name="notify_stop">停止</string>
+    <string name="label_channel">配置与预览通道</string>
+    <string name="add_channel">添加通道</string>
+    <string name="remove_channel">删除当前通道</string>
+    <string name="channel_number">通道 %1$d</string>
+    <string name="confirm_remove">删除通道 %1$d？</string>
+    <string name="remove_explanation">这一路的采集和推流将停止。</string>
+    <string name="remove_action">删除</string>
 </resources>

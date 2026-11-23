@@ -18,26 +18,26 @@
  */
 namespace frame_pipeline {
 
-void on_frame(uvc_frame_t *frame);
+void on_frame(int channel, uvc_frame_t *frame);
 
-void set_preview_enabled(bool enabled);
-bool preview_enabled();
+void set_preview_enabled(int channel, bool enabled);
+bool preview_enabled(int channel);
 
 /** Take-and-clear latest JPEG for preview. Returns null jbyteArray if none. */
-jbyteArray take_latest_frame(JNIEnv *env);
+jbyteArray take_latest_frame(int channel, JNIEnv *env);
 
-void http_subscriber_add();
-void http_subscriber_remove();
-int http_subscriber_count();
+void http_subscriber_add(int channel);
+void http_subscriber_remove(int channel);
+int http_subscriber_count(int channel);
 
 /**
  * Copy latest HTTP JPEG if seq is newer than last_seq.
  * On success updates last_seq and fills out; returns true.
  */
-bool copy_http_frame_if_newer(uint64_t &last_seq, std::vector<uint8_t> &out);
+bool copy_http_frame_if_newer(int channel, uint64_t &last_seq, std::vector<uint8_t> &out);
 
-void clear();
-void reset_counters();
-int exchange_frame_count();
+void clear(int channel);
+void reset_counters(int channel);
+int exchange_frame_count(int channel);
 
 }  // namespace frame_pipeline

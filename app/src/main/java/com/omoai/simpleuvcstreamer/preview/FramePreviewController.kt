@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class FramePreviewController(
     private val imageView: ImageView,
+    private val channel: Int = 0,
     private val onRenderStateChanged: (Boolean) -> Unit = {},
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -81,7 +82,7 @@ class FramePreviewController(
 
         // Native owns streaming truth and returns null when there is no frame yet.
         val jpeg = try {
-            UvcNative.nativeTakeLatestFrame()
+            UvcNative.nativeTakeLatestFrame(channel)
         } catch (t: Throwable) {
             FileLogger.log("preview: takeLatestFrame failed: ${t.message}")
             return
@@ -94,7 +95,7 @@ class FramePreviewController(
                     "preview: still no frame after " +
                         "${emptyPolls * POLL_INTERVAL_MS / 1000}s, re-asserting native preview",
                 )
-                UvcNative.nativeSetPreviewEnabled(true)
+                UvcNative.nativeSetPreviewEnabled(channel, true)
             }
             return
         }
@@ -177,7 +178,7 @@ class FramePreviewController(
 
     fun setEnabled(enabled: Boolean) {
         if (previewEnabled.get() == enabled) {
-            if (enabled) UvcNative.nativeSetPreviewEnabled(true)
+            if (enabled) UvcNative.nativeSetPreviewEnabled(channel, true)
             return
         }
         previewEnabled.set(enabled)
@@ -188,7 +189,7 @@ class FramePreviewController(
             FileLogger.log("preview: disabled")
         }
         // Native only copies JPEG into the preview slot when this is true.
-        UvcNative.nativeSetPreviewEnabled(enabled)
+        UvcNative.nativeSetPreviewEnabled(channel, enabled)
         if (enabled) {
             markWaiting()
             ensureWorker()
@@ -212,7 +213,7 @@ class FramePreviewController(
     /** Re-assert native flag after USB close/reopen (close must not leave preview stuck). */
     fun syncNative() {
         if (!previewEnabled.get()) return
-        UvcNative.nativeSetPreviewEnabled(true)
+        UvcNative.nativeSetPreviewEnabled(channel, true)
         ensureWorker()
     }
 
@@ -222,7 +223,7 @@ class FramePreviewController(
 
     fun release() {
         previewEnabled.set(false)
-        UvcNative.nativeSetPreviewEnabled(false)
+        UvcNative.nativeSetPreviewEnabled(channel, false)
         worker?.interrupt()
         worker = null
         pendingFrame.getAndSet(null)?.let { if (!it.isRecycled) it.recycle() }

@@ -65,3 +65,11 @@ target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
     ${HV_TARGET}
     ${TURBOJPEG_TARGET}
 )
+
+# Explicit developer target, never packaged in the APK. Run via adb for channel isolation checks.
+add_executable(channel_isolation_test EXCLUDE_FROM_ALL
+    tests/channel_isolation_test.cpp frame_pipeline.cpp jpeg_encode.cpp)
+target_include_directories(channel_isolation_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(channel_isolation_test PRIVATE android log PkgConfig::libusb
+    $<IF:$<TARGET_EXISTS:LibUVC::UVCStatic>,LibUVC::UVCStatic,LibUVC::UVCShared>
+    ${TURBOJPEG_TARGET})

@@ -62,6 +62,9 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
     private lateinit var switchBattery: MaterialSwitch
     private lateinit var switchPreview: MaterialSwitch
     private lateinit var previewContainer: MaterialCardView
+    private lateinit var dropdownChannel: AutoCompleteTextView
+    private var shownChannels = emptyList<Int>()
+    private var previewChannel = 0
     private lateinit var dropdownDevice: AutoCompleteTextView
     private lateinit var layoutResolution: TextInputLayout
     private lateinit var dropdownResolution: AutoCompleteTextView
@@ -118,9 +121,10 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
     private val fpsHandler = Handler(Looper.getMainLooper())
     private val fpsRunnable = object : Runnable {
         override fun run() {
-            val session = capture
+            val session = capture?.session
+            val fps = if (session != null && UvcNative.isLibLoaded) session.frameCountPerSecond() else 0
             if (session != null && session.isStreaming && UvcNative.isLibLoaded) {
-                updateFpsText(session.frameCountPerSecond())
+                updateFpsText(fps)
             } else if (::tvFps.isInitialized) {
                 tvFps.visibility = View.GONE
             }
@@ -172,6 +176,21 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
         switchPreview = findViewById(R.id.switchPreview)
         previewContainer = findViewById(R.id.previewContainer)
         dropdownDevice = findViewById(R.id.dropdownDevice)
+        dropdownChannel = findViewById(R.id.dropdownChannel)
+        dropdownChannel.setOnItemClickListener { _, _, position, _ ->
+            shownChannels.getOrNull(position)?.let { capture?.selectChannel(it) }
+        }
+        findViewById<View>(R.id.addChannel).setOnClickListener { capture?.addChannel() }
+        findViewById<View>(R.id.removeChannel).setOnClickListener {
+            val service = capture ?: return@setOnClickListener
+            val index = service.selectedChannel
+            MaterialAlertDialogBuilder(this)
+                .setTitle(getString(R.string.confirm_remove, service.visibleChannels.indexOf(index) + 1))
+                .setMessage(R.string.remove_explanation)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.remove_action) { _, _ -> service.removeChannel(index) }
+                .show()
+        }
         layoutResolution = findViewById(R.id.layoutResolution)
         dropdownResolution = findViewById(R.id.dropdownResolution)
         layoutFps = findViewById(R.id.layoutFps)
@@ -424,9 +443,27 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
 
     private fun renderCaptureState() {
         val service = capture ?: return
+        val ids = service.visibleChannels
+        if (shownChannels != ids) {
+            shownChannels = ids
+            dropdownChannel.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown,
+                ids.indices.map { getString(R.string.channel_number, it + 1) }))
+        }
+        dropdownChannel.setText(getString(R.string.channel_number, ids.indexOf(service.selectedChannel) + 1), false)
+        findViewById<View>(R.id.channelPicker).visibility = if (ids.size > 1) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.addChannel).visibility = if (ids.size < UvcNative.CHANNEL_COUNT) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.removeChannel).visibility = if (service.selectedChannel != 0) View.VISIBLE else View.GONE
+        if (previewChannel != service.selectedChannel) {
+            previewController.release()
+            previewChannel = service.selectedChannel
+            previewController = FramePreviewController(imagePreview, previewChannel)
+            previewController.setEnabled(switchPreview.isChecked && uiResumed)
+            lastDeviceSig = ""
+            lastModeSig = ""
+        }
         updateStatus(service.statusText)
         setSwitchChecked(service.isStreaming)
-        bindDeviceDropdown(service.uvcDevices, service.currentDevice ?: service.uvcDevices.firstOrNull())
+        bindDeviceDropdown(service.uvcDevices, service.currentDevice)
         bindModeDropdowns(service.streamModes, service.selectedMode, service.selectedFps)
         if (!editHttpPort.isFocused) {
             val port = if (service.http.isRunning) {
@@ -451,7 +488,8 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
         dropdownDevice.setOnItemClickListener { _, _, pos, _ ->
             if (suppressDeviceCallback) return@setOnItemClickListener
             val service = capture ?: return@setOnItemClickListener
-            val device = service.uvcDevices.getOrNull(pos) ?: return@setOnItemClickListener
+            if (pos == 0) { service.clearSelection(); return@setOnItemClickListener }
+            val device = service.uvcDevices.getOrNull(pos - 1) ?: return@setOnItemClickListener
             service.selectDevice(device)
         }
         dropdownResolution.setOnItemClickListener { _, _, pos, _ ->
@@ -470,16 +508,16 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
         val sig = devices.joinToString("|") { it.deviceName } + "#" + (selected?.deviceName ?: "")
         if (sig == lastDeviceSig) return
         lastDeviceSig = sig
-        val labels = devices.map { UvcDeviceFinder.labelFor(it) }
+        val labels = listOf("未选择（停用）") + devices.map { UvcDeviceFinder.labelFor(it) }
         val selectedIndex = selected?.let { sel ->
             devices.indexOfFirst { it.deviceName == sel.deviceName }
-        }?.takeIf { it >= 0 } ?: 0
+        }?.takeIf { it >= 0 }
         suppressDeviceCallback = true
         dropdownDevice.setAdapter(ArrayAdapter(this, R.layout.item_spinner_dropdown, labels))
-        if (labels.isNotEmpty()) {
-            dropdownDevice.setText(labels[selectedIndex.coerceAtMost(labels.lastIndex)], false)
+        if (selectedIndex != null) {
+            dropdownDevice.setText(labels[selectedIndex + 1], false)
         } else {
-            dropdownDevice.setText("", false)
+            dropdownDevice.setText(labels[0], false)
         }
         suppressDeviceCallback = false
     }
@@ -579,7 +617,7 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
             if (forceList) {
                 lastAccessSignature = ""
             }
-            renderAccessList(http?.accessEndpoints().orEmpty())
+            renderAccessList(http?.accessEndpoints(capture?.visibleChannels.orEmpty()).orEmpty())
         }
     }
 
@@ -679,7 +717,7 @@ class MainActivity : AppCompatActivity(), CaptureService.Listener {
         if (isChecked) {
             ensureKeepAliveThen { startCaptureFromUi() }
         } else {
-            capture?.stopCapture(userInitiated = true)
+            capture?.stopCapture()
         }
     }
 

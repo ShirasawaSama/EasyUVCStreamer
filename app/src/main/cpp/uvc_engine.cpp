@@ -1,3 +1,4 @@
+#include "channel_config.h"
 #include "uvc_engine.h"
 
 #include "log.h"
@@ -25,33 +26,39 @@
 namespace uvc_engine {
 namespace {
 
-std::atomic<bool> g_is_streaming{false};
+struct CameraState {
+    std::atomic<bool> g_is_streaming{false};
+    uvc_device_handle_t *g_devh = nullptr;
+};
+CameraState cameras[kCameraChannelCount];
 std::atomic<bool> g_stop_event_thread{false};
 std::atomic<int> g_event_errors{0};
 
 std::mutex g_dev_mu;
 libusb_context *g_usb_ctx = nullptr;
 uvc_context_t *g_uvc_ctx = nullptr;
-uvc_device_handle_t *g_devh = nullptr;
 std::thread g_event_thread;
 bool g_event_thread_started = false;
 
-void stop_streaming_unlocked() {
-    g_is_streaming.store(false, std::memory_order_release);
-    if (!g_devh) return;
+void stop_streaming_unlocked(int channel) {
+    auto &camera = cameras[channel];
+    camera.g_is_streaming.store(false, std::memory_order_release);
+    if (!camera.g_devh) return;
     // May block briefly; Android overlay uses timed wait on hot-unplug.
-    uvc_stop_streaming(g_devh);
+    uvc_stop_streaming(camera.g_devh);
+    frame_pipeline::clear(channel);
 }
 
-void close_handle_unlocked() {
-    g_is_streaming.store(false, std::memory_order_release);
-    frame_pipeline::clear();
-    if (!g_devh) return;
-    uvc_device_handle_t *tmp = g_devh;
-    g_devh = nullptr;
+void close_handle_unlocked(int channel) {
+    auto &camera = cameras[channel];
+    camera.g_is_streaming.store(false, std::memory_order_release);
+    if (!camera.g_devh) { frame_pipeline::clear(channel); return; }
+    uvc_device_handle_t *tmp = camera.g_devh;
+    camera.g_devh = nullptr;
     // Stop before close; ignore failures when the USB device is already gone.
     uvc_stop_streaming(tmp);
     uvc_close(tmp);
+    frame_pipeline::clear(channel);
     g_event_errors.store(0, std::memory_order_relaxed);
     LOGI("nativeClose: Device handle closed");
 }
@@ -68,8 +75,7 @@ void uvc_event_thread_func() {
         if (res < 0) {
             int n = g_event_errors.fetch_add(1, std::memory_order_relaxed) + 1;
             LOGE("libusb_handle_events failed: %d (n=%d)", res, n);
-            // Device likely gone — stop delivering frames; Java will close on DETACH.
-            g_is_streaming.store(false, std::memory_order_release);
+            // USB context errors are not camera-specific. DETACH closes only the affected channel.
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         } else {
             g_event_errors.store(0, std::memory_order_relaxed);
@@ -79,10 +85,11 @@ void uvc_event_thread_func() {
 }
 
 void uvc_frame_callback(uvc_frame_t *frame, void *ptr) {
-    (void) ptr;
-    if (!g_is_streaming.load(std::memory_order_acquire)) return;
+    const int channel = static_cast<int>(reinterpret_cast<intptr_t>(ptr));
+    auto &camera = cameras[channel];
+    if (!camera.g_is_streaming.load(std::memory_order_acquire)) return;
     if (!frame) return;
-    frame_pipeline::on_frame(frame);
+    frame_pipeline::on_frame(channel, frame);
 }
 
 void log_usb_interfaces(libusb_device_handle *usb_devh) {
@@ -134,7 +141,8 @@ int init() {
     return 0;
 }
 
-int open_device(int fd) {
+int open_device(int channel, int fd) {
+    auto &camera = cameras[channel];
     if (!g_uvc_ctx) {
         int ir = init();
         if (ir < 0) return -100 + ir;
@@ -143,19 +151,19 @@ int open_device(int fd) {
     std::lock_guard<std::mutex> lock(g_dev_mu);
     if (!g_uvc_ctx) return -1;
 
-    if (g_devh) {
-        close_handle_unlocked();
+    if (camera.g_devh) {
+        close_handle_unlocked(channel);
     }
 
     LOGI("nativeOpenDevice: Wrapping FD %d", fd);
-    uvc_error_t res = uvc_wrap(fd, g_uvc_ctx, &g_devh);
+    uvc_error_t res = uvc_wrap(fd, g_uvc_ctx, &camera.g_devh);
     if (res < 0) {
         LOGE("uvc_wrap failed: %d", res);
-        g_devh = nullptr;
+        camera.g_devh = nullptr;
         return (int) res;
     }
 
-    libusb_device_handle *usb = uvc_get_libusb_handle(g_devh);
+    libusb_device_handle *usb = uvc_get_libusb_handle(camera.g_devh);
     if (usb) log_usb_interfaces(usb);
 
     g_event_errors.store(0, std::memory_order_relaxed);
@@ -163,22 +171,23 @@ int open_device(int fd) {
     return 0;
 }
 
-void stop_stream() {
+void stop_stream(int channel) {
     std::lock_guard<std::mutex> lock(g_dev_mu);
-    stop_streaming_unlocked();
+    stop_streaming_unlocked(channel);
     LOGI("nativeStopStream: Streaming stopped (device kept open)");
 }
 
-void close_device() {
+void close_device(int channel) {
     std::lock_guard<std::mutex> lock(g_dev_mu);
-    close_handle_unlocked();
+    close_handle_unlocked(channel);
 }
 
-int start_stream(int width, int height, int fps, const char *format) {
+int start_stream(int channel, int width, int height, int fps, const char *format) {
+    auto &camera = cameras[channel];
     std::lock_guard<std::mutex> lock(g_dev_mu);
-    if (!g_devh) return -1;
+    if (!camera.g_devh) return -1;
 
-    stop_streaming_unlocked();
+    stop_streaming_unlocked(channel);
 
     StreamPixelFormat pixel = StreamPixelFormat::Mjpeg;
     if (format) {
@@ -192,19 +201,19 @@ int start_stream(int width, int height, int fps, const char *format) {
     }
 
     uvc_stream_ctrl_t ctrl{};
-    uvc_error_t res = get_stream_ctrl(g_devh, &ctrl, pixel, width, height, fps);
+    uvc_error_t res = get_stream_ctrl(camera.g_devh, &ctrl, pixel, width, height, fps);
     if (res < 0) {
         LOGE("Failed to find stream format/size fmt=%s: %d", format ? format : "mjpeg", res);
         return res;
     }
 
-    frame_pipeline::reset_counters();
-    g_is_streaming.store(true, std::memory_order_release);
+    frame_pipeline::reset_counters(channel);
+    camera.g_is_streaming.store(true, std::memory_order_release);
 
-    res = uvc_start_streaming(g_devh, &ctrl, uvc_frame_callback, nullptr, 0);
+    res = uvc_start_streaming(camera.g_devh, &ctrl, uvc_frame_callback, reinterpret_cast<void *>(static_cast<intptr_t>(channel)), 0);
     if (res < 0) {
         LOGE("uvc_start_streaming failed: %d", res);
-        g_is_streaming.store(false, std::memory_order_release);
+        camera.g_is_streaming.store(false, std::memory_order_release);
     } else {
         LOGI("nativeStartStream: Streaming %s %dx%d if=%u interval=%u maxPayload=%u",
              format ? format : "mjpeg",
@@ -213,15 +222,16 @@ int start_stream(int width, int height, int fps, const char *format) {
     return (int) res;
 }
 
-int get_frame_count() {
-    return frame_pipeline::exchange_frame_count();
+int get_frame_count(int channel) {
+    return frame_pipeline::exchange_frame_count(channel);
 }
 
-std::string get_resolutions() {
+std::string get_resolutions(int channel) {
+    auto &camera = cameras[channel];
     // Wire: WxH|fps1,fps2|defaultFps|isDeviceDefault|format;
     // format = mjpeg | yuyv | uyvy. If any MJPEG exists, only MJPEG modes are returned.
     std::lock_guard<std::mutex> lock(g_dev_mu);
-    if (!g_devh) return "";
+    if (!camera.g_devh) return "";
 
     auto interval_to_fps = [](uint32_t interval_100ns) -> int {
         if (interval_100ns == 0) return 0;
@@ -253,7 +263,7 @@ std::string get_resolutions() {
     using Key = std::tuple<int, int, std::string>;
     std::map<Key, ModeAgg> modes;
 
-    const uvc_format_desc_t *format_desc = uvc_get_format_descs(g_devh);
+    const uvc_format_desc_t *format_desc = uvc_get_format_descs(camera.g_devh);
     while (format_desc) {
         const char *fmt = nullptr;
         if (format_desc->bDescriptorSubtype == UVC_VS_FORMAT_MJPEG) {
@@ -365,12 +375,12 @@ std::string get_resolutions() {
     return ss.str();
 }
 
-void set_preview_enabled(bool enabled) {
-    frame_pipeline::set_preview_enabled(enabled);
+void set_preview_enabled(int channel, bool enabled) {
+    frame_pipeline::set_preview_enabled(channel, enabled);
 }
 
-jbyteArray take_latest_frame(JNIEnv *env) {
-    return frame_pipeline::take_latest_frame(env);
+jbyteArray take_latest_frame(int channel, JNIEnv *env) {
+    return frame_pipeline::take_latest_frame(channel, env);
 }
 
 }  // namespace uvc_engine

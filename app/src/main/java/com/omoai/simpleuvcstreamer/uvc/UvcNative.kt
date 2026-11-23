@@ -3,6 +3,7 @@ package com.omoai.simpleuvcstreamer.uvc
 import android.util.Log
 
 object UvcNative {
+    const val CHANNEL_COUNT = 3
     private const val TAG = "UVCStreamer"
     var isLibLoaded: Boolean = false
         private set
@@ -18,15 +19,16 @@ object UvcNative {
     }
 
     external fun nativeInit(): Int
-    external fun nativeOpenDevice(fd: Int): Int
-    external fun nativeGetResolutions(): String
-    external fun nativeStartStream(width: Int, height: Int, fps: Int, format: String): Int
-    external fun nativeStopStream()
-    external fun nativeGetFrameCount(): Int
-    external fun nativeClose()
-    external fun nativeSetPreviewEnabled(enabled: Boolean)
-    external fun nativeTakeLatestFrame(): ByteArray?
+    external fun nativeOpenDevice(channel: Int, fd: Int): Int
+    external fun nativeGetResolutions(channel: Int): String
+    external fun nativeStartStream(channel: Int, width: Int, height: Int, fps: Int, format: String): Int
+    external fun nativeStopStream(channel: Int)
+    external fun nativeGetFrameCount(channel: Int): Int
+    external fun nativeClose(channel: Int)
+    external fun nativeSetPreviewEnabled(channel: Int, enabled: Boolean)
+    external fun nativeTakeLatestFrame(channel: Int): ByteArray?
 
+    external fun nativeSetChannelOrder(slots: IntArray)
     external fun nativeStartHttpServer(port: Int): Int
     external fun nativeStopHttpServer()
     external fun nativeIsHttpServerRunning(): Boolean

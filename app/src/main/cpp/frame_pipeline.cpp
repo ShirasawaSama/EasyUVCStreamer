@@ -1,3 +1,4 @@
+#include "channel_config.h"
 #include "frame_pipeline.h"
 
 #include "jpeg_encode.h"
@@ -11,6 +12,7 @@
 namespace frame_pipeline {
 namespace {
 
+struct ChannelState {
 std::atomic<int> g_frame_count{0};
 std::atomic<int> g_callback_seq{0};
 std::atomic<bool> g_preview_enabled{false};
@@ -24,6 +26,9 @@ std::mutex g_http_mu;
 std::vector<uint8_t> g_http_jpeg;
 uint64_t g_http_seq = 0;
 bool g_http_has = false;
+
+};
+ChannelState channels[kCameraChannelCount];
 
 // Reused RGB/JPEG scratch for YUV encode path (callback thread only).
 thread_local std::vector<uint8_t> t_jpeg_scratch;
@@ -74,9 +79,10 @@ bool encode_to_jpeg(uvc_frame_t *frame, std::vector<uint8_t> &out) {
 
 }  // namespace
 
-void on_frame(uvc_frame_t *frame) {
-    g_frame_count.fetch_add(1, std::memory_order_relaxed);
-    int n = g_callback_seq.fetch_add(1, std::memory_order_relaxed) + 1;
+void on_frame(int channel, uvc_frame_t *frame) {
+    auto &state = channels[channel];
+    state.g_frame_count.fetch_add(1, std::memory_order_relaxed);
+    int n = state.g_callback_seq.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n == 1 || n % 30 == 0) {
         LOGI("frame #%d size=%zu fmt=%d %ux%u",
              n,
@@ -86,8 +92,8 @@ void on_frame(uvc_frame_t *frame) {
              frame ? frame->height : 0);
     }
 
-    const bool want_http = g_http_subscribers.load(std::memory_order_relaxed) > 0;
-    const bool want_preview = g_preview_enabled.load(std::memory_order_relaxed);
+    const bool want_http = state.g_http_subscribers.load(std::memory_order_relaxed) > 0;
+    const bool want_preview = state.g_preview_enabled.load(std::memory_order_relaxed);
     if (!want_http && !want_preview) {
         return;
     }
@@ -96,92 +102,103 @@ void on_frame(uvc_frame_t *frame) {
     }
 
     if (want_http) {
-        replace_slot(g_http_mu, g_http_jpeg, g_http_has, &g_http_seq,
+        replace_slot(state.g_http_mu, state.g_http_jpeg, state.g_http_has, &state.g_http_seq,
                      t_jpeg_scratch.data(), t_jpeg_scratch.size());
     }
     if (want_preview) {
-        replace_slot(g_preview_mu, g_latest_jpeg, g_has_latest, nullptr,
+        replace_slot(state.g_preview_mu, state.g_latest_jpeg, state.g_has_latest, nullptr,
                      t_jpeg_scratch.data(), t_jpeg_scratch.size());
     }
 }
 
-void set_preview_enabled(bool enabled) {
-    g_preview_enabled.store(enabled, std::memory_order_relaxed);
+void set_preview_enabled(int channel, bool enabled) {
+    auto &state = channels[channel];
+    state.g_preview_enabled.store(enabled, std::memory_order_relaxed);
     if (!enabled) {
-        std::lock_guard<std::mutex> lock(g_preview_mu);
-        g_latest_jpeg.clear();
-        g_has_latest = false;
+        std::lock_guard<std::mutex> lock(state.g_preview_mu);
+        state.g_latest_jpeg.clear();
+        state.g_has_latest = false;
     }
 }
 
-bool preview_enabled() {
-    return g_preview_enabled.load(std::memory_order_relaxed);
+bool preview_enabled(int channel) {
+    auto &state = channels[channel];
+    return state.g_preview_enabled.load(std::memory_order_relaxed);
 }
 
-jbyteArray take_latest_frame(JNIEnv *env) {
-    std::lock_guard<std::mutex> lock(g_preview_mu);
-    if (!g_has_latest || g_latest_jpeg.empty()) {
+jbyteArray take_latest_frame(int channel, JNIEnv *env) {
+    auto &state = channels[channel];
+    std::lock_guard<std::mutex> lock(state.g_preview_mu);
+    if (!state.g_has_latest || state.g_latest_jpeg.empty()) {
         return nullptr;
     }
-    jbyteArray arr = env->NewByteArray(static_cast<jsize>(g_latest_jpeg.size()));
+    jbyteArray arr = env->NewByteArray(static_cast<jsize>(state.g_latest_jpeg.size()));
     if (!arr) {
         return nullptr;
     }
     env->SetByteArrayRegion(
-            arr, 0, static_cast<jsize>(g_latest_jpeg.size()),
-            reinterpret_cast<const jbyte *>(g_latest_jpeg.data()));
-    g_has_latest = false;
+            arr, 0, static_cast<jsize>(state.g_latest_jpeg.size()),
+            reinterpret_cast<const jbyte *>(state.g_latest_jpeg.data()));
+    state.g_has_latest = false;
     return arr;
 }
 
-void http_subscriber_add() {
-    g_http_subscribers.fetch_add(1, std::memory_order_relaxed);
+void http_subscriber_add(int channel) {
+    auto &state = channels[channel];
+    std::lock_guard<std::mutex> lock(state.g_http_mu);
+    state.g_http_subscribers.fetch_add(1, std::memory_order_relaxed);
 }
 
-void http_subscriber_remove() {
-    int prev = g_http_subscribers.fetch_sub(1, std::memory_order_relaxed);
+void http_subscriber_remove(int channel) {
+    auto &state = channels[channel];
+    std::lock_guard<std::mutex> lock(state.g_http_mu);
+    int prev = state.g_http_subscribers.fetch_sub(1, std::memory_order_relaxed);
     if (prev <= 1) {
-        g_http_subscribers.store(0, std::memory_order_relaxed);
-        std::lock_guard<std::mutex> lock(g_http_mu);
-        g_http_jpeg.clear();
-        g_http_has = false;
+        state.g_http_subscribers.store(0, std::memory_order_relaxed);
+        state.g_http_jpeg.clear();
+        state.g_http_has = false;
     }
 }
 
-int http_subscriber_count() {
-    return g_http_subscribers.load(std::memory_order_relaxed);
+int http_subscriber_count(int channel) {
+    auto &state = channels[channel];
+    return state.g_http_subscribers.load(std::memory_order_relaxed);
 }
 
-bool copy_http_frame_if_newer(uint64_t &last_seq, std::vector<uint8_t> &out) {
-    std::lock_guard<std::mutex> lock(g_http_mu);
-    if (!g_http_has || g_http_jpeg.empty() || g_http_seq == last_seq) {
+bool copy_http_frame_if_newer(int channel, uint64_t &last_seq, std::vector<uint8_t> &out) {
+    auto &state = channels[channel];
+    std::lock_guard<std::mutex> lock(state.g_http_mu);
+    if (!state.g_http_has || state.g_http_jpeg.empty() || state.g_http_seq == last_seq) {
         return false;
     }
-    out = g_http_jpeg;
-    last_seq = g_http_seq;
+    out = state.g_http_jpeg;
+    last_seq = state.g_http_seq;
     return true;
 }
 
-void clear() {
+void clear(int channel) {
+    auto &state = channels[channel];
     {
-        std::lock_guard<std::mutex> lock(g_preview_mu);
-        g_latest_jpeg.clear();
-        g_has_latest = false;
+        std::lock_guard<std::mutex> lock(state.g_preview_mu);
+        state.g_latest_jpeg.clear();
+        state.g_has_latest = false;
     }
     {
-        std::lock_guard<std::mutex> lock(g_http_mu);
-        g_http_jpeg.clear();
-        g_http_has = false;
+        std::lock_guard<std::mutex> lock(state.g_http_mu);
+        state.g_http_jpeg.clear();
+        state.g_http_has = false;
     }
 }
 
-void reset_counters() {
-    g_frame_count.store(0, std::memory_order_relaxed);
-    g_callback_seq.store(0, std::memory_order_relaxed);
+void reset_counters(int channel) {
+    auto &state = channels[channel];
+    state.g_frame_count.store(0, std::memory_order_relaxed);
+    state.g_callback_seq.store(0, std::memory_order_relaxed);
 }
 
-int exchange_frame_count() {
-    return g_frame_count.exchange(0);
+int exchange_frame_count(int channel) {
+    auto &state = channels[channel];
+    return state.g_frame_count.exchange(0);
 }
 
 }  // namespace frame_pipeline

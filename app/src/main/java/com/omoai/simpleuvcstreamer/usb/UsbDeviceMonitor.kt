@@ -71,7 +71,7 @@ class UsbDeviceMonitor(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             flags = flags or PendingIntent.FLAG_MUTABLE
         }
-        val pi = PendingIntent.getBroadcast(context, 0, intent, flags)
+        val pi = PendingIntent.getBroadcast(context, device.deviceId, intent, flags)
         usbManager.requestPermission(device, pi)
     }
 

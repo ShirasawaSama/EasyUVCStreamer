@@ -81,12 +81,50 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <TextView
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="@string/section_capture"
-                    android:textAppearance="@style/Text.Uvc.Section" />
-
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_weight="1"
+                        android:layout_height="wrap_content"
+                        android:text="@string/section_capture"
+                        android:textAppearance="@style/Text.Uvc.Section" />
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/removeChannel"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:padding="0dp"
+                        android:visibility="gone"
+                        android:contentDescription="@string/remove_channel"
+                        android:text="−" />
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/addChannel"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
+                        android:padding="0dp"
+                        android:contentDescription="@string/add_channel"
+                        android:text="+" />
+                </LinearLayout>
+                <com.google.android.material.textfield.TextInputLayout
+                    style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:id="@+id/channelPicker"
+                    android:visibility="gone"
+                    android:hint="@string/label_channel">
+                    <AutoCompleteTextView
+                        android:id="@+id/dropdownChannel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="none"
+                        android:textColor="@color/text_primary" />
+                </com.google.android.material.textfield.TextInputLayout>
                 <com.google.android.material.textfield.TextInputLayout
                     style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
                     android:layout_width="match_parent"

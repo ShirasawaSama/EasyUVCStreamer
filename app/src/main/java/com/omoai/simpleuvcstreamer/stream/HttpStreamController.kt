@@ -69,20 +69,23 @@ class HttpStreamController(context: Context) {
     }
 
     /** Stream URLs only, sorted by access tier. */
-    fun accessEndpoints(): List<AccessEndpoint> {
+    fun accessEndpoints(channels: List<Int>): List<AccessEndpoint> {
         val p = if (isRunning) UvcNative.nativeGetHttpServerPort() else port
         if (p !in 1..65535) return emptyList()
-        return NetworkAddresses.ipv4Endpoints().map { ep ->
+        return NetworkAddresses.ipv4Endpoints().flatMap { ep ->
+            channels.indices.map { index ->
+            val channel = index + 1
             AccessEndpoint(
-                label = when (ep.tier) {
+                label = (if (channels.size > 1) "相机 $channel · " else "") + when (ep.tier) {
                     NetworkAddresses.AccessTier.LOCAL -> "本机回路"
                     NetworkAddresses.AccessTier.LAN -> ep.interfaceName
                     NetworkAddresses.AccessTier.OTHER -> ep.interfaceName
                 },
-                url = "http://${ep.host}:$p$STREAM_PATH",
+                url = "http://${ep.host}:$p/stream/$channel.mjpg",
                 host = ep.host,
                 tier = ep.tier,
             )
+            }
         }
     }
 }

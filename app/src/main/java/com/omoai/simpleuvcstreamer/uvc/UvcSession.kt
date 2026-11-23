@@ -12,7 +12,7 @@ import com.omoai.simpleuvcstreamer.util.FileLogger
  * Main-line: camera MJPEG when available; otherwise YUV encoded to JPEG (turbojpeg)
  * for HTTP push. Preview decode is opt-in via [FramePreviewController].
  */
-class UvcSession(private val usbManager: UsbManager) {
+class UvcSession(private val usbManager: UsbManager, val channel: Int = 0) {
 
     var currentDevice: UsbDevice? = null
         private set
@@ -54,7 +54,7 @@ class UvcSession(private val usbManager: UsbManager) {
         currentDevice = device
 
         val res = try {
-            UvcNative.nativeOpenDevice(conn.fileDescriptor)
+            UvcNative.nativeOpenDevice(channel, conn.fileDescriptor)
         } catch (t: Throwable) {
             FileLogger.log("nativeOpenDevice threw: ${t.message}")
             close()
@@ -70,7 +70,7 @@ class UvcSession(private val usbManager: UsbManager) {
 
     fun loadStreamModes(): List<StreamMode> {
         return try {
-            val raw = UvcNative.nativeGetResolutions()
+            val raw = UvcNative.nativeGetResolutions(channel)
             FileLogger.log("Available modes: $raw")
             StreamMode.parse(raw)
         } catch (t: Throwable) {
@@ -82,7 +82,7 @@ class UvcSession(private val usbManager: UsbManager) {
     fun startStream(width: Int, height: Int, fps: Int, format: String): Int {
         FileLogger.log("Starting/switching stream to ${width}x${height} @${fps}fps fmt=$format")
         val startRes = try {
-            UvcNative.nativeStartStream(width, height, fps, format)
+            UvcNative.nativeStartStream(channel, width, height, fps, format)
         } catch (t: Throwable) {
             FileLogger.log("nativeStartStream threw: ${t.message}")
             isStreaming = false
@@ -97,7 +97,7 @@ class UvcSession(private val usbManager: UsbManager) {
         FileLogger.log("Stopping stream (keep device open)...")
         isStreaming = false
         try {
-            UvcNative.nativeStopStream()
+            UvcNative.nativeStopStream(channel)
         } catch (t: Throwable) {
             FileLogger.log("nativeStopStream threw: ${t.message}")
         }
@@ -106,7 +106,7 @@ class UvcSession(private val usbManager: UsbManager) {
     fun close() {
         isStreaming = false
         try {
-            UvcNative.nativeClose()
+            UvcNative.nativeClose(channel)
         } catch (t: Throwable) {
             FileLogger.log("nativeClose threw: ${t.message}")
         }
@@ -125,7 +125,7 @@ class UvcSession(private val usbManager: UsbManager) {
     }
 
     fun frameCountPerSecond(): Int = try {
-        UvcNative.nativeGetFrameCount()
+        UvcNative.nativeGetFrameCount(channel)
     } catch (_: Throwable) {
         0
     }

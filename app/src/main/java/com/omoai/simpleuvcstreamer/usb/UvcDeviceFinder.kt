@@ -59,7 +59,7 @@ object UvcDeviceFinder {
     }
 
     fun labelFor(device: UsbDevice): String {
-        return "${device.productName ?: "Unknown Device"} (${device.vendorId}:${device.productId})"
+        return "${device.productName ?: "Unknown Device"} (${device.vendorId}:${device.productId}) · ${device.deviceName.substringAfterLast('/')}"
     }
 
     fun sameDevice(a: UsbDevice?, b: UsbDevice?): Boolean {

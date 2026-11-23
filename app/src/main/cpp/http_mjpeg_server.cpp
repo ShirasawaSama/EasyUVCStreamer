@@ -1,3 +1,4 @@
+#include "channel_config.h"
 #include "http_mjpeg_server.h"
 
 #include "frame_pipeline.h"
@@ -24,22 +25,34 @@ std::mutex g_mu;
 std::unique_ptr<hv::HttpService> g_service;
 std::unique_ptr<hv::HttpServer> g_server;
 std::atomic<bool> g_running{false};
+// Each URL has a revision so an old client cannot resume after its slot is reused.
+struct Route { int slot = -1; uint64_t revision = 0; };
+Route routes[kCameraChannelCount] = {{0, 0}};
+std::mutex route_mu;
+
+Route lookup(int position) {
+    std::lock_guard<std::mutex> lock(route_mu);
+    return routes[position];
+}
 std::atomic<int> g_port{0};
 std::atomic<int> g_clients{0};
+std::atomic<uint64_t> g_generation{0};
 
 struct SubscriberGuard {
-    SubscriberGuard() {
-        frame_pipeline::http_subscriber_add();
+    int channel;
+    explicit SubscriberGuard(int value) : channel(value) {
+        frame_pipeline::http_subscriber_add(channel);
         g_clients.fetch_add(1, std::memory_order_relaxed);
     }
     ~SubscriberGuard() {
-        frame_pipeline::http_subscriber_remove();
+        frame_pipeline::http_subscriber_remove(channel);
         g_clients.fetch_sub(1, std::memory_order_relaxed);
     }
 };
 
-void write_mjpeg_stream(const HttpContextPtr &ctx) {
-    auto guard = std::make_shared<SubscriberGuard>();
+void write_mjpeg_stream(const HttpContextPtr &ctx, int position, Route route, uint64_t generation) {
+    const int channel = route.slot;
+    auto guard = std::make_shared<SubscriberGuard>(channel);
     auto writer = ctx->writer;
 
     writer->Begin();
@@ -55,12 +68,12 @@ void write_mjpeg_stream(const HttpContextPtr &ctx) {
     std::vector<uint8_t> jpeg;
     jpeg.reserve(128 * 1024);
 
-    while (writer->isConnected()) {
+    while (writer->isConnected() && g_generation.load() == generation && lookup(position).revision == route.revision) {
         if (!writer->isWriteComplete()) {
             hv_delay(1);
             continue;
         }
-        if (!frame_pipeline::copy_http_frame_if_newer(last_seq, jpeg)) {
+        if (!frame_pipeline::copy_http_frame_if_newer(channel, last_seq, jpeg)) {
             hv_delay(5);
             continue;
         }
@@ -96,9 +109,15 @@ void setup_routes(hv::HttpService &service) {
                 "<title>UVC 立传</title></head><body style=\"margin:0;background:#111;color:#eee;"
                 "font-family:sans-serif;text-align:center\">"
                 "<h1 style=\"margin:12px\">UVC 立传</h1>"
-                "<p style=\"opacity:.7;margin:0 12px 12px;font-size:14px\">EasyUVCStreamer</p>"
-                "<img src=\"/stream.mjpg\" style=\"max-width:100%;height:auto\" alt=\"stream\">"
-                "</body></html>";
+                "<p style=\"opacity:.7;margin:0 12px 12px;font-size:14px\">EasyUVCStreamer</p>";
+        std::lock_guard<std::mutex> lock(route_mu);
+        for (int i = 0; i < kCameraChannelCount; ++i) {
+            if (routes[i].slot < 0) break;
+            const auto number = std::to_string(i + 1);
+            if (routes[1].slot >= 0) resp->body += "<h2>通道 " + number + "</h2>";
+            resp->body += "<img src='/stream/" + number + ".mjpg' style='max-width:100%;height:auto' alt='通道 " + number + "'>";
+        }
+        resp->body += "</body></html>";
         return 200;
     });
 
@@ -109,21 +128,41 @@ void setup_routes(hv::HttpService &service) {
         ss << "{\"running\":" << (g_running.load() ? "true" : "false")
            << ",\"port\":" << g_port.load()
            << ",\"clients\":" << g_clients.load()
-           << ",\"subscribers\":" << frame_pipeline::http_subscriber_count()
+           << ",\"subscribers\":" << (frame_pipeline::http_subscriber_count(0) + frame_pipeline::http_subscriber_count(1) + frame_pipeline::http_subscriber_count(2))
            << ",\"stream\":\"" << kStreamPath << "\"}";
         resp->body = ss.str();
         return 200;
     });
 
-    service.GET(kStreamPath, [](const HttpContextPtr &ctx) {
-        std::thread([ctx]() {
-            write_mjpeg_stream(ctx);
-        }).detach();
-        return HTTP_STATUS_UNFINISHED;
-    });
+    auto add_stream = [&](const char *path, int channel) {
+        service.GET(path, [channel](const HttpContextPtr &ctx) {
+            const Route route = lookup(channel);
+            if (route.slot < 0) return 404;
+            const auto generation = g_generation.load();
+            std::thread([ctx, channel, route, generation]() {
+                write_mjpeg_stream(ctx, channel, route, generation);
+            }).detach();
+            return static_cast<int>(HTTP_STATUS_UNFINISHED);
+        });
+    };
+    add_stream(kStreamPath, 0); // Preserve the original single-camera URL.
+    add_stream("/stream/1.mjpg", 0);
+    add_stream("/stream/2.mjpg", 1);
+    add_stream("/stream/3.mjpg", 2);
 }
 
 }  // namespace
+
+void set_channel_order(const int *slots, int count) {
+    std::lock_guard<std::mutex> lock(route_mu);
+    for (int i = 0; i < kCameraChannelCount; ++i) {
+        const int slot = i < count ? slots[i] : -1;
+        if (routes[i].slot != slot) {
+            routes[i].slot = slot;
+            ++routes[i].revision;
+        }
+    }
+}
 
 int start(int port) {
     if (port <= 0 || port > 65535) {
@@ -138,6 +177,7 @@ int start(int port) {
     }
 
     if (g_server) {
+        g_generation.fetch_add(1);
         g_server->stop();
         g_server.reset();
         g_service.reset();
@@ -170,6 +210,7 @@ int start(int port) {
 void stop() {
     std::lock_guard<std::mutex> lock(g_mu);
     if (g_server) {
+        g_generation.fetch_add(1);
         g_server->stop();
         g_server.reset();
     }
