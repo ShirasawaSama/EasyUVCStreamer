@@ -1,16 +1,3 @@
---- a/include/libuvc/libuvc_internal.h
-+++ b/include/libuvc/libuvc_internal.h
-@@ -224,7 +224,9 @@
-   this macro.
-  */
- #ifndef LIBUVC_NUM_TRANSFER_BUFS
--#if defined(__APPLE__) && defined(__MACH__)
-+#if defined(__ANDROID__)
-+#define LIBUVC_NUM_TRANSFER_BUFS 4
-+#elif defined(__APPLE__) && defined(__MACH__)
- #define LIBUVC_NUM_TRANSFER_BUFS 20
- #else
- #define LIBUVC_NUM_TRANSFER_BUFS 100
 --- a/src/stream.c
 +++ b/src/stream.c
 @@ -37,6 +37,9 @@
@@ -23,22 +10,6 @@
  #include "libuvc/libuvc_internal.h"
  #include "errno.h"
  
-@@ -1181,9 +1184,15 @@
-         packets_per_transfer = (ctrl->dwMaxVideoFrameSize +
-                                 endpoint_bytes_per_packet - 1) / endpoint_bytes_per_packet;
- 
-+        /* Cap packets per URB. Android USBFS often returns ENOMEM above ~8-12. */
-+#if defined(__ANDROID__)
-+        if (packets_per_transfer > 8)
-+          packets_per_transfer = 8;
-+#else
-         /* But keep a reasonable limit: Otherwise we start dropping data */
-         if (packets_per_transfer > LIBUVC_PACKETS_PER_TRANSFER_MAX)
-           packets_per_transfer = LIBUVC_PACKETS_PER_TRANSFER_MAX;
-+#endif
-         
-         total_transfer_size = packets_per_transfer * endpoint_bytes_per_packet;
-         break;
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -153,6 +153,9 @@

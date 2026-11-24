@@ -16,6 +16,14 @@ else()
     set(BUILD_TARGET "Static")
 endif()
 
+set(PLATFORM_OPTIONS)
+if(VCPKG_TARGET_IS_ANDROID)
+    list(APPEND PLATFORM_OPTIONS
+        -DLIBUVC_NUM_TRANSFER_BUFS=4
+        -DLIBUVC_PACKETS_PER_TRANSFER_MAX=8
+    )
+endif()
+
 vcpkg_find_acquire_program(PKGCONFIG)
 vcpkg_cmake_configure(
     SOURCE_PATH ${SOURCE_PATH}
@@ -24,6 +32,7 @@ vcpkg_cmake_configure(
         -DCMAKE_BUILD_TARGET=${BUILD_TARGET}
         -DBUILD_EXAMPLE=OFF
         -DBUILD_TEST=OFF
+        ${PLATFORM_OPTIONS}
 )
 vcpkg_cmake_install()
 
