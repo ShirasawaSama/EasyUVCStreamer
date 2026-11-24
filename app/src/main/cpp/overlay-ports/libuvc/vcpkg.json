@@ -1,7 +1,6 @@
 {
   "name": "libuvc",
-  "version": "0.0.7",
-  "port-version": 3,
+  "version": "0.0.9",
   "description": "a cross-platform library for USB video devices (Android iso-friendly overlay)",
   "homepage": "https://github.com/libuvc/libuvc",
   "supports": "!uwp & !windows",

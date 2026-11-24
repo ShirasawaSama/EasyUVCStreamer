@@ -10,7 +10,7 @@ index fbaffc9..672ebb9 100644
  
  # Xcode and Visual Studio do not using CMAKE_BUILD_TYPE cache variable
  # so we use Release build type only with single configuration generators.
-@@ -39,10 +38,11 @@ set(SOURCES
+@@ -70,13 +69,14 @@ set(SOURCES
    src/misc.c
  )
  
@@ -18,12 +18,15 @@ index fbaffc9..672ebb9 100644
 +FIND_PACKAGE(PkgConfig REQUIRED)
 +pkg_check_modules(libusb REQUIRED IMPORTED_TARGET libusb-1.0)
  
- # JpegPkg name to differ from shipped with CMake
--find_package(JpegPkg QUIET)
-+find_package(JPEG REQUIRED)
- if(JPEG_FOUND)
-   message(STATUS "Building libuvc with JPEG support.")
-   set(LIBUVC_HAS_JPEG TRUE)
+ if(DISABLE_JPEG)
+   message(STATUS "libuvc will not support JPEG decoding.")
+ else()
+   # JpegPkg name to differ from shipped with CMake
+-  find_package(JpegPkg QUIET)
++  find_package(JPEG REQUIRED)
+   if(JPEG_FOUND)
+     message(STATUS "Building libuvc with JPEG support.")
+     set(LIBUVC_HAS_JPEG TRUE)
 @@ -116,8 +116,11 @@ foreach(target_name IN LISTS UVC_TARGETS)
    )
    target_link_libraries(${target_name}

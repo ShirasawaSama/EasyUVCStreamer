@@ -33,8 +33,8 @@
 +          packets_per_transfer = 8;
 +#else
          /* But keep a reasonable limit: Otherwise we start dropping data */
-         if (packets_per_transfer > 32)
-           packets_per_transfer = 32;
+         if (packets_per_transfer > LIBUVC_PACKETS_PER_TRANSFER_MAX)
+           packets_per_transfer = LIBUVC_PACKETS_PER_TRANSFER_MAX;
 +#endif
          
          total_transfer_size = packets_per_transfer * endpoint_bytes_per_packet;
@@ -56,17 +56,6 @@
        break;
      }
    }
-@@ -1258,7 +1275,10 @@
-       libusb_free_transfer ( strmh->transfers[transfer_id]);
-       strmh->transfers[transfer_id] = 0;
-     }
-+#if !defined(__ANDROID__)
-+    /* Upstream masks submit failures; on Android that yields silent 0-FPS streams. */
-     ret = UVC_SUCCESS;
-+#endif
-   }
- 
-   UVC_EXIT(ret);
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -121,6 +121,9 @@
