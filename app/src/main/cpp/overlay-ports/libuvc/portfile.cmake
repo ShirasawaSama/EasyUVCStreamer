@@ -2,7 +2,7 @@ vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO libuvc/libuvc
     REF "v${VERSION}"
-    SHA512 cf2c0a6cc04717f284f25bed17f178a4b2b2a2bb3e5937e50be144e88db2c481c5ea763c164fe0234834fea4837f96fcc13bdbdafd4610d2985943562dfcc72f
+    SHA512 3d0834c250f2e33f0eaedb6738631fd646a6b61e3195c472c904569f7b1369944e048165acccae90c145032abc3610d8f4331d23e83bcb8626c60c40324cdf89
     HEAD_REF master
     PATCHES
         build_fix.patch
@@ -16,6 +16,14 @@ else()
     set(BUILD_TARGET "Static")
 endif()
 
+set(PLATFORM_OPTIONS)
+if(VCPKG_TARGET_IS_ANDROID)
+    list(APPEND PLATFORM_OPTIONS
+        -DLIBUVC_NUM_TRANSFER_BUFS=4
+        -DLIBUVC_PACKETS_PER_TRANSFER_MAX=8
+    )
+endif()
+
 vcpkg_find_acquire_program(PKGCONFIG)
 vcpkg_cmake_configure(
     SOURCE_PATH ${SOURCE_PATH}
@@ -24,6 +32,7 @@ vcpkg_cmake_configure(
         -DCMAKE_BUILD_TARGET=${BUILD_TARGET}
         -DBUILD_EXAMPLE=OFF
         -DBUILD_TEST=OFF
+        ${PLATFORM_OPTIONS}
 )
 vcpkg_cmake_install()
 
